@@ -4,6 +4,10 @@ import { getUsageStorePath, estimateCostForModel } from '../utils/constants';
 import { getAgentTranscriptsPathForWorkspace } from '../utils/cursorProject';
 
 const ACTIVE_CONVERSATION_FILENAME = 'active-conversation.json';
+const TITLES_FILENAME = 'conversation-titles.json';
+
+/** Key in limits.json for the global default limit (applies to every conversation). */
+export const GLOBAL_LIMIT_KEY = '_global';
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -137,6 +141,28 @@ export function setLimit(
   const limits = getLimits(overridePath);
   limits[conversationId] = limit;
   fs.writeFileSync(limitsFile, JSON.stringify(limits, null, 2), 'utf8');
+}
+
+/**
+ * Read conversation titles (first prompt line), keyed by conversation ID.
+ * Written by the beforeSubmitPrompt hook when it first sees a conversation.
+ */
+export function getTitles(overridePath?: string): Record<string, string> {
+  const storePath = getUsageStorePath(overridePath);
+  const file = path.join(storePath, TITLES_FILENAME);
+  if (!fs.existsSync(file)) {
+    return {};
+  }
+  try {
+    const parsed = JSON.parse(fs.readFileSync(file, 'utf8')) as Record<string, unknown>;
+    const out: Record<string, string> = {};
+    for (const [k, v] of Object.entries(parsed)) {
+      if (typeof v === 'string') out[k] = v;
+    }
+    return out;
+  } catch {
+    return {};
+  }
 }
 
 const DEBOUNCE_MS = 400;

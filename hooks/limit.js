@@ -8,7 +8,9 @@ const os = require('os');
 const USAGE_DIR = path.join(os.homedir(), '.cursor', 'usage-wizard');
 const USAGE_FILE = path.join(USAGE_DIR, 'usage.jsonl');
 const LIMITS_FILE = path.join(USAGE_DIR, 'limits.json');
+const TITLES_FILE = path.join(USAGE_DIR, 'conversation-titles.json');
 const ACTIVE_CONVERSATION_FILE = path.join(USAGE_DIR, 'active-conversation.json');
+const GLOBAL_LIMIT_KEY = '_global';
 
 const MODEL_COSTS = {
   'claude-opus': 0.025,
@@ -57,6 +59,22 @@ function getLimits() {
   }
 }
 
+function getTitles() {
+  if (!fs.existsSync(TITLES_FILE)) return {};
+  try {
+    return JSON.parse(fs.readFileSync(TITLES_FILE, 'utf8'));
+  } catch {
+    return {};
+  }
+}
+
+function setTitle(conversationId, title) {
+  const titles = getTitles();
+  if (titles[conversationId] != null) return;
+  titles[conversationId] = title;
+  fs.writeFileSync(TITLES_FILE, JSON.stringify(titles, null, 2), 'utf8');
+}
+
 let input = '';
 process.stdin.setEncoding('utf8');
 process.stdin.on('data', (chunk) => (input += chunk));
@@ -79,8 +97,15 @@ process.stdin.on('end', () => {
       'utf8'
     );
 
+    // Record first prompt line as conversation title (human-readable name)
+    const prompt = typeof data.prompt === 'string' ? data.prompt : '';
+    if (prompt) {
+      const firstLine = prompt.trim().split('\n')[0].trim().slice(0, 80);
+      if (firstLine) setTitle(conversationId, firstLine);
+    }
+
     const limits = getLimits();
-    const limit = limits[conversationId];
+    const limit = limits[conversationId] || limits[GLOBAL_LIMIT_KEY];
     if (!limit) {
       process.stdout.write(JSON.stringify({ continue: true }) + '\n');
       process.exit(0);

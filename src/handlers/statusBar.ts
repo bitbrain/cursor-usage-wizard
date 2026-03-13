@@ -2,6 +2,215 @@ import * as vscode from 'vscode';
 import type { NewUsageResponse } from '../services/api';
 import type { ConversationUsage } from '../services/usageStore';
 
+// --- Animation state (tween + red pulse) ---
+const TWEEN_DURATION_MS = 300;
+const TWEEN_STEP_MS = 16;
+
+const PULSE_TOTAL_MS = 1500;
+const PULSE_HOLD_PERCENT = 0.75;
+const PULSE_HOLD_MS = Math.round(PULSE_TOTAL_MS * PULSE_HOLD_PERCENT);
+const PULSE_FADE_MS = Math.round(PULSE_TOTAL_MS * (1 - PULSE_HOLD_PERCENT));
+const PULSE_FADE_STEP_MS = 16;
+
+let lastValues: {
+  totalPct?: number;
+  autoPct?: number;
+  apiUsedCents?: number;
+  apiLimitCents?: number;
+  onDemandUsedCents?: number;
+  latestCost?: number;
+  latestConvId?: string;
+} = {};
+const tweenTimeouts: Record<string, NodeJS.Timeout[]> = Object.create(null);
+/** Pulse: timeouts + item + restoreColor so we can restore when cleared or done. */
+const pulseTimeouts: Record<string, {
+  flash?: NodeJS.Timeout;
+  fadeStart?: NodeJS.Timeout;
+  fadeSteps?: NodeJS.Timeout[];
+  item?: vscode.StatusBarItem;
+  restoreColor?: vscode.ThemeColor | undefined;
+}> = Object.create(null);
+
+function clearTweenTimeoutsForSegment(segmentKey: string): void {
+  const tids = tweenTimeouts[segmentKey];
+  if (tids) {
+    for (const t of tids) clearTimeout(t);
+    tweenTimeouts[segmentKey] = [];
+  }
+}
+
+function restorePulseSegment(pulse: { item?: vscode.StatusBarItem; restoreColor?: vscode.ThemeColor | undefined }): void {
+  if (pulse.item) pulse.item.color = pulse.restoreColor;
+}
+
+function clearSegmentTimeouts(segmentKey: string): void {
+  clearTweenTimeoutsForSegment(segmentKey);
+  const pulse = pulseTimeouts[segmentKey];
+  if (pulse) {
+    if (pulse.flash) clearTimeout(pulse.flash);
+    if (pulse.fadeStart) clearTimeout(pulse.fadeStart);
+    if (pulse.fadeSteps) {
+      for (const t of pulse.fadeSteps) clearTimeout(t);
+    }
+    restorePulseSegment(pulse);
+    delete pulseTimeouts[segmentKey];
+  }
+}
+
+function clearAllAnimationTimeouts(): void {
+  for (const key of Object.keys(tweenTimeouts)) clearSegmentTimeouts(key);
+  for (const key of Object.keys(pulseTimeouts)) {
+    const pulse = pulseTimeouts[key];
+    if (pulse.flash) clearTimeout(pulse.flash);
+    if (pulse.fadeStart) clearTimeout(pulse.fadeStart);
+    if (pulse.fadeSteps) {
+      for (const t of pulse.fadeSteps) clearTimeout(t);
+    }
+    restorePulseSegment(pulse);
+    delete pulseTimeouts[key];
+  }
+}
+
+function easeOutQuad(t: number): number {
+  return 1 - (1 - t) * (1 - t);
+}
+
+function runTween(
+  segmentKey: string,
+  start: number,
+  end: number,
+  durationMs: number,
+  formatter: (n: number) => string,
+  onStep: (formatted: string) => void,
+  onDone?: () => void
+): void {
+  clearTweenTimeoutsForSegment(segmentKey);
+  const list: NodeJS.Timeout[] = [];
+  tweenTimeouts[segmentKey] = list;
+  const startTime = Date.now();
+  const step = (): void => {
+    const elapsed = Date.now() - startTime;
+    const t = Math.min(1, elapsed / durationMs);
+    const eased = easeOutQuad(t);
+    const value = start + (end - start) * eased;
+    onStep(formatter(value));
+    if (t < 1) {
+      const id = setTimeout(step, TWEEN_STEP_MS) as unknown as NodeJS.Timeout;
+      list.push(id);
+    } else {
+      list.length = 0;
+      onDone?.();
+    }
+  };
+  step();
+}
+
+function runTweenCustom(
+  segmentKey: string,
+  durationMs: number,
+  formatter: (t: number) => string,
+  onStep: (formatted: string) => void,
+  onDone?: () => void
+): void {
+  clearTweenTimeoutsForSegment(segmentKey);
+  const list: NodeJS.Timeout[] = [];
+  tweenTimeouts[segmentKey] = list;
+  const startTime = Date.now();
+  const step = (): void => {
+    const elapsed = Date.now() - startTime;
+    const t = Math.min(1, elapsed / durationMs);
+    const eased = easeOutQuad(t);
+    onStep(formatter(eased));
+    if (t < 1) {
+      const id = setTimeout(step, TWEEN_STEP_MS) as unknown as NodeJS.Timeout;
+      list.push(id);
+    } else {
+      list.length = 0;
+      onDone?.();
+    }
+  };
+  step();
+}
+
+/** Same as 75% limit (warning) — pink-ish "over limit" color at 100%. */
+const PULSE_WARNING_THEME = new vscode.ThemeColor('statusBarItem.warningBackground');
+/** Fade: from warning-like hex (can't read theme as hex) to end color. */
+const PULSE_FADE_START_HEX = '#d4a574';
+/** Fallback fade-end when item.color is not a hex (theme-controlled, we can't read resolved value). */
+const PULSE_FADE_END_HEX_FALLBACK = '#4b5563';
+
+const HEX_COLOR_REGEX = /^#[0-9A-Fa-f]{6}$/;
+
+/** If item currently has a hex color, use it as fade end (theme may have resolved it); else fallback. */
+function getFadeEndHex(item: vscode.StatusBarItem): string {
+  const current = item.color;
+  return typeof current === 'string' && HEX_COLOR_REGEX.test(current) ? current : PULSE_FADE_END_HEX_FALLBACK;
+}
+
+function hexToRgb(hex: string): [number, number, number] {
+  const n = parseInt(hex.slice(1), 16);
+  return [(n >> 16) & 0xff, (n >> 8) & 0xff, n & 0xff];
+}
+
+function rgbToHex(r: number, g: number, b: number): string {
+  return '#' + [r, g, b]
+    .map((x) => Math.round(Math.max(0, Math.min(255, x))).toString(16).padStart(2, '0'))
+    .join('');
+}
+
+function mixHex(hex1: string, hex2: string, t: number): string {
+  const [r1, g1, b1] = hexToRgb(hex1);
+  const [r2, g2, b2] = hexToRgb(hex2);
+  return rgbToHex(r1 + (r2 - r1) * t, g1 + (g2 - g1) * t, b1 + (b2 - b1) * t);
+}
+
+function startPulse(
+  item: vscode.StatusBarItem,
+  segmentKey: string,
+  restoreColor: vscode.ThemeColor | undefined
+): void {
+  const fadeEndHex = getFadeEndHex(item);
+  const existing = pulseTimeouts[segmentKey];
+  if (existing) {
+    if (existing.flash) clearTimeout(existing.flash);
+    if (existing.fadeStart) clearTimeout(existing.fadeStart);
+    if (existing.fadeSteps) {
+      for (const t of existing.fadeSteps) clearTimeout(t);
+    }
+    restorePulseSegment(existing);
+  }
+  item.color = PULSE_WARNING_THEME;
+  const pulseState = {
+    flash: undefined as NodeJS.Timeout | undefined,
+    fadeStart: undefined as NodeJS.Timeout | undefined,
+    fadeSteps: undefined as NodeJS.Timeout[] | undefined,
+    item,
+    restoreColor,
+  };
+  pulseTimeouts[segmentKey] = pulseState;
+
+  pulseState.fadeStart = setTimeout(() => {
+    const startTime = Date.now();
+    const steps: NodeJS.Timeout[] = [];
+    const step = (): void => {
+      const elapsed = Date.now() - startTime;
+      const t = Math.min(1, elapsed / PULSE_FADE_MS);
+      item.color = mixHex(PULSE_FADE_START_HEX, fadeEndHex, t);
+      if (t < 1) {
+        steps.push(setTimeout(step, PULSE_FADE_STEP_MS) as unknown as NodeJS.Timeout);
+      } else {
+        const p = pulseTimeouts[segmentKey];
+        if (p) p.fadeSteps = undefined;
+        delete pulseTimeouts[segmentKey];
+        item.color = restoreColor;
+      }
+    };
+    const p = pulseTimeouts[segmentKey];
+    if (p) p.fadeSteps = steps;
+    step();
+  }, PULSE_HOLD_MS);
+}
+
 export function createStatusBarItem(): vscode.StatusBarItem {
   return vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
 }
@@ -94,73 +303,155 @@ export function updateStatusBar(
   activeConversationId?: string
 ): void {
   if (!usage) {
+    clearAllAnimationTimeouts();
     setNoUsageState(items, !!authOkNoUsage);
     return;
   }
 
+  const config = vscode.workspace.getConfiguration('cursorUsageWizard');
+  const animationsOn = config.get<boolean>('usageAnimations', true);
+  clearAllAnimationTimeouts();
+
   const pct = usage.totalPercent ?? usage.apiPool.percent;
   const pctStr = fmtPct(pct);
-  const color = getStatusBarColor(pct);
+  const totalColor = getStatusBarColor(pct);
 
-  // Total % — icon + value, tooltip with full summary
-  items.total.text = `$(graph) ${pctStr}`;
   items.total.tooltip = buildFullTooltip(usage, conversations, showPerConversation);
-  items.total.color = color;
   items.total.command = 'cursorUsageWizard.refreshStats';
+  if (!animationsOn || lastValues.totalPct === undefined) {
+    items.total.text = `$(graph) ${pctStr}`;
+    items.total.color = totalColor;
+    lastValues.totalPct = pct;
+  } else if (lastValues.totalPct !== pct) {
+    startPulse(items.total, 'total', totalColor);
+    runTween('total', lastValues.totalPct, pct, TWEEN_DURATION_MS, fmtPct, (formatted) => {
+      items.total.text = `$(graph) ${formatted}`;
+    }, () => {
+      lastValues.totalPct = pct;
+    });
+  }
   items.total.show();
 
   // Auto (included) % — Auto + Composer usage, only when present
   if (usage.autoComposerPool != null) {
-    const autoPct = fmtPct(usage.autoComposerPool.percent);
-    items.auto.text = `$(sparkle) ${autoPct}`;
-    items.auto.tooltip = buildAutoTooltip(usage.autoComposerPool.percent);
-    items.auto.color = getStatusBarColor(usage.autoComposerPool.percent);
+    const autoPct = usage.autoComposerPool.percent;
+    const autoPctStr = fmtPct(autoPct);
+    const autoColor = getStatusBarColor(autoPct);
+    items.auto.tooltip = buildAutoTooltip(autoPct);
     items.auto.command = 'cursorUsageWizard.refreshStats';
+    if (!animationsOn || lastValues.autoPct === undefined) {
+      items.auto.text = `$(sparkle) ${autoPctStr}`;
+      items.auto.color = autoColor;
+      lastValues.autoPct = autoPct;
+    } else if (lastValues.autoPct !== autoPct) {
+      startPulse(items.auto, 'auto', autoColor);
+      runTween('auto', lastValues.autoPct, autoPct, TWEEN_DURATION_MS, fmtPct, (formatted) => {
+        items.auto.text = `$(sparkle) ${formatted}`;
+      }, () => {
+        lastValues.autoPct = autoPct;
+      });
+    }
     items.auto.show();
   } else {
+    lastValues.autoPct = undefined;
     items.auto.hide();
   }
 
-  // API pool — icon + $ used/limit, tooltip with API + Auto/Composer
-  const apiStr = `${fmtDollars(usage.apiPool.usedCents)}/${fmtDollars(usage.apiPool.limitCents)}`;
-  items.api.text = `$(circuit-board) ${apiStr}`;
+  // API pool — icon + $ used/limit
+  const apiUsed = usage.apiPool.usedCents;
+  const apiLimit = usage.apiPool.limitCents;
+  const apiStr = `${fmtDollars(apiUsed)}/${fmtDollars(apiLimit)}`;
+  const apiColor = getStatusBarColor(usage.apiPool.percent);
   items.api.tooltip = buildApiTooltip(usage);
-  items.api.color = getStatusBarColor(usage.apiPool.percent);
   items.api.command = 'cursorUsageWizard.refreshStats';
+  if (!animationsOn || lastValues.apiUsedCents === undefined) {
+    items.api.text = `$(circuit-board) ${apiStr}`;
+    items.api.color = apiColor;
+    lastValues.apiUsedCents = apiUsed;
+    lastValues.apiLimitCents = apiLimit;
+  } else if (lastValues.apiUsedCents !== apiUsed || lastValues.apiLimitCents !== apiLimit) {
+    startPulse(items.api, 'api', apiColor);
+    const startUsed = lastValues.apiUsedCents ?? apiUsed;
+    const startLimit = lastValues.apiLimitCents ?? apiLimit;
+    runTweenCustom('api', TWEEN_DURATION_MS, (t) => {
+      const u = Math.round(startUsed + (apiUsed - startUsed) * t);
+      const l = Math.round(startLimit + (apiLimit - startLimit) * t);
+      return `${fmtDollars(u)}/${fmtDollars(l)}`;
+    }, (formatted) => {
+      items.api.text = `$(circuit-board) ${formatted}`;
+    }, () => {
+      lastValues.apiUsedCents = apiUsed;
+      lastValues.apiLimitCents = apiLimit;
+    });
+  }
   items.api.show();
 
-  // On-demand — icon + $ used[/limit], tooltip with OD details
+  // On-demand — icon + $ used[/limit]
   const od = usage.onDemand;
   if (od) {
+    const odUsed = od.usedCents;
     const odStr = od.limitCents != null
-      ? `${fmtDollars(od.usedCents)}/${fmtDollars(od.limitCents)}`
-      : fmtDollars(od.usedCents);
-    items.onDemand.text = `$(credit-card) ${odStr}`;
+      ? `${fmtDollars(odUsed)}/${fmtDollars(od.limitCents)}`
+      : fmtDollars(odUsed);
+    const odColor = od.limitCents != null ? getStatusBarColor((odUsed / od.limitCents) * 100) : undefined;
     items.onDemand.tooltip = buildOnDemandTooltip(od);
-    items.onDemand.color = od.limitCents != null ? getStatusBarColor((od.usedCents / od.limitCents) * 100) : undefined;
     items.onDemand.command = 'cursorUsageWizard.refreshStats';
+    if (!animationsOn || lastValues.onDemandUsedCents === undefined) {
+      items.onDemand.text = `$(credit-card) ${odStr}`;
+      items.onDemand.color = odColor;
+      lastValues.onDemandUsedCents = odUsed;
+    } else if (lastValues.onDemandUsedCents !== odUsed) {
+      startPulse(items.onDemand, 'onDemand', odColor);
+      const startUsed = lastValues.onDemandUsedCents;
+      const endLimit = od.limitCents;
+      runTween('onDemand', startUsed, odUsed, TWEEN_DURATION_MS, (cents) => {
+        const c = Math.round(cents);
+        return endLimit != null ? `${fmtDollars(c)}/${fmtDollars(endLimit)}` : fmtDollars(c);
+      }, (formatted) => {
+        items.onDemand.text = `$(credit-card) ${formatted}`;
+      }, () => {
+        lastValues.onDemandUsedCents = odUsed;
+      });
+    }
     items.onDemand.show();
   } else {
+    lastValues.onDemandUsedCents = undefined;
     items.onDemand.hide();
   }
 
-  // Current/latest conversation — prefer active (from hooks) if in list, else most recent by lastTs
+  // Current/latest conversation
   if (showLatestInStatusBar !== false && conversations && conversations.length > 0) {
     const latest = conversations[0];
     const activeConv = activeConversationId
       ? conversations.find((c) => c.conversationId === activeConversationId)
       : undefined;
     const conv = activeConv ?? latest;
-    const costStr = `~$${conv.estimatedCost.toFixed(2)}`;
+    const cost = conv.estimatedCost;
+    const costStr = `~$${cost.toFixed(2)}`;
     const label = activeConv ? 'Current conversation' : 'Latest conversation';
-    items.latest.text = `$(history) ${costStr}`;
     items.latest.tooltip = new vscode.MarkdownString(
       `**${label}**\n\n${conv.conversationId.slice(0, 16)}...\n${costStr} · ${conv.eventCount} events`
     );
     items.latest.command = 'cursorUsageWizard.refreshStats';
-    items.latest.color = undefined;
+    const sameConv = lastValues.latestConvId === conv.conversationId;
+    if (!animationsOn || lastValues.latestCost === undefined || !sameConv) {
+      items.latest.text = `$(history) ${costStr}`;
+      items.latest.color = undefined;
+      lastValues.latestCost = cost;
+      lastValues.latestConvId = conv.conversationId;
+    } else if (lastValues.latestCost !== cost) {
+      startPulse(items.latest, 'latest', undefined);
+      runTween('latest', lastValues.latestCost, cost, TWEEN_DURATION_MS, (n) => `~$${n.toFixed(2)}`, (formatted) => {
+        items.latest.text = `$(history) ${formatted}`;
+      }, () => {
+        lastValues.latestCost = cost;
+        lastValues.latestConvId = conv.conversationId;
+      });
+    }
     items.latest.show();
   } else {
+    lastValues.latestCost = undefined;
+    lastValues.latestConvId = undefined;
     items.latest.hide();
   }
 }
@@ -173,6 +464,9 @@ export function updateLatestStatusBarItem(
   activeConversationId?: string
 ): void {
   if (!showLatest || conversations.length === 0) {
+    clearSegmentTimeouts('latest');
+    lastValues.latestCost = undefined;
+    lastValues.latestConvId = undefined;
     item.hide();
     return;
   }
@@ -181,14 +475,32 @@ export function updateLatestStatusBarItem(
     ? conversations.find((c) => c.conversationId === activeConversationId)
     : undefined;
   const conv = activeConv ?? latest;
-  const costStr = `~$${conv.estimatedCost.toFixed(2)}`;
+  const cost = conv.estimatedCost;
+  const costStr = `~$${cost.toFixed(2)}`;
   const label = activeConv ? 'Current conversation' : 'Latest conversation';
-  item.text = `$(history) ${costStr}`;
   item.tooltip = new vscode.MarkdownString(
     `**${label}**\n\n${conv.conversationId.slice(0, 16)}...\n${costStr} · ${conv.eventCount} events`
   );
   item.command = 'cursorUsageWizard.refreshStats';
-  item.color = undefined;
+
+  const config = vscode.workspace.getConfiguration('cursorUsageWizard');
+  const animationsOn = config.get<boolean>('usageAnimations', true);
+  const sameConv = lastValues.latestConvId === conv.conversationId;
+
+  if (!animationsOn || lastValues.latestCost === undefined || !sameConv) {
+    item.text = `$(history) ${costStr}`;
+    item.color = undefined;
+    lastValues.latestCost = cost;
+    lastValues.latestConvId = conv.conversationId;
+  } else if (lastValues.latestCost !== cost) {
+    startPulse(item, 'latest', undefined);
+    runTween('latest', lastValues.latestCost, cost, TWEEN_DURATION_MS, (n) => `~$${n.toFixed(2)}`, (formatted) => {
+      item.text = `$(history) ${formatted}`;
+    }, () => {
+      lastValues.latestCost = cost;
+      lastValues.latestConvId = conv.conversationId;
+    });
+  }
   item.show();
 }
 

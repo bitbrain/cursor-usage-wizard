@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { readUsageEvents, getLimits, setLimit } from '../services/usageStore';
+import { readUsageEvents, getLimits, setLimit, GLOBAL_LIMIT_KEY, getTitles } from '../services/usageStore';
 import { getUsageStorePath } from '../utils/constants';
 
 export async function showConversations(context: vscode.ExtensionContext): Promise<void> {
@@ -9,6 +9,7 @@ export async function showConversations(context: vscode.ExtensionContext): Promi
 
   const conversations = readUsageEvents(storePathOverride);
   const limits = getLimits(storePathOverride);
+  const titles = getTitles(storePathOverride);
 
   if (conversations.length === 0) {
     vscode.window.showInformationMessage(
@@ -18,13 +19,13 @@ export async function showConversations(context: vscode.ExtensionContext): Promi
   }
 
   const items = conversations.map((c) => {
-    const short = c.conversationId.slice(0, 12);
-    const limit = limits[c.conversationId];
+    const label = titles[c.conversationId] || c.conversationId.slice(0, 12) + '...';
+    const limit = limits[c.conversationId] || limits[GLOBAL_LIMIT_KEY];
     const limitStr = limit
       ? ` [limit: $${limit.maxCost ?? '?'}/${limit.maxEvents ?? '?'}]`
       : '';
     return {
-      label: `${short}...`,
+      label: label.length > 60 ? label.slice(0, 57) + '...' : label,
       description: `${c.eventCount} events, ~$${c.estimatedCost.toFixed(2)}${limitStr}`,
       detail: c.conversationId,
       conversationId: c.conversationId,
@@ -47,16 +48,28 @@ export async function setConversationLimit(
 ): Promise<void> {
   const cid = conversationId;
   if (!cid) {
-    const config = vscode.workspace.getConfiguration('cursorUsageWizard');
-    const storePath = getUsageStorePath(config.get<string>('usageStorePath'));
     const conversations = readUsageEvents(storePathOverride);
+    const scopeChoice = await vscode.window.showQuickPick(
+      [
+        { label: 'Global default (all conversations)', value: 'global' as const },
+        { label: 'A specific conversation', value: 'conversation' as const },
+      ],
+      { placeHolder: 'Set limit for…' }
+    );
+    if (!scopeChoice) return;
+    if (scopeChoice.value === 'global') {
+      return setConversationLimit(GLOBAL_LIMIT_KEY, storePathOverride);
+    }
     if (conversations.length === 0) {
       vscode.window.showWarningMessage('No conversations to set limit for.');
       return;
     }
+    const config = vscode.workspace.getConfiguration('cursorUsageWizard');
+    const titlesForPick = getTitles(storePathOverride);
     const selected = await vscode.window.showQuickPick(
       conversations.map((c) => ({
-        label: c.conversationId.slice(0, 12) + '...',
+        label: titlesForPick[c.conversationId] || c.conversationId.slice(0, 12) + '...',
+        description: c.conversationId.slice(0, 12) + '...',
         conversationId: c.conversationId,
       })),
       { placeHolder: 'Select conversation' }
@@ -65,35 +78,81 @@ export async function setConversationLimit(
     return setConversationLimit(selected.conversationId, storePathOverride);
   }
 
-  const presets = [
-    { label: '$0.50', value: 0.5 },
-    { label: '$1', value: 1 },
-    { label: '$2', value: 2 },
-    { label: '$5', value: 5 },
-    { label: 'Custom', value: -1 },
-  ];
+  const isGlobal = cid === GLOBAL_LIMIT_KEY;
+  const limitTypeChoice = await vscode.window.showQuickPick(
+    [
+      { label: 'Cost limit ($)', value: 'cost' as const },
+      { label: 'Event limit (count)', value: 'events' as const },
+      { label: 'Both', value: 'both' as const },
+    ],
+    { placeHolder: 'What limit do you want to set?' }
+  );
 
-  const choice = await vscode.window.showQuickPick(presets, {
-    placeHolder: 'Set cost limit for conversation',
-  });
+  if (!limitTypeChoice) return;
 
-  if (!choice) return;
+  const wantCost = limitTypeChoice.value === 'cost' || limitTypeChoice.value === 'both';
+  const wantEvents = limitTypeChoice.value === 'events' || limitTypeChoice.value === 'both';
 
-  let maxCost: number;
-  if (choice.value === -1) {
+  let maxCost: number | undefined;
+  let maxEvents: number | undefined;
+
+  if (wantCost) {
+    const presets = [
+      { label: '$0.50', value: 0.5 },
+      { label: '$1', value: 1 },
+      { label: '$2', value: 2 },
+      { label: '$5', value: 5 },
+      { label: 'Custom', value: -1 },
+    ];
+    const choice = await vscode.window.showQuickPick(presets, {
+      placeHolder: isGlobal ? 'Set cost limit (per conversation)' : 'Set cost limit for conversation',
+    });
+    if (!choice) return;
+    if (choice.value === -1) {
+      const input = await vscode.window.showInputBox({
+        prompt: 'Enter max cost ($)',
+        validateInput: (v) => {
+          const n = parseFloat(v);
+          return isNaN(n) || n <= 0 ? 'Enter a positive number' : null;
+        },
+      });
+      if (input == null) return;
+      maxCost = parseFloat(input);
+    } else {
+      maxCost = choice.value;
+    }
+  }
+
+  if (wantEvents) {
     const input = await vscode.window.showInputBox({
-      prompt: 'Enter max cost ($)',
+      prompt: 'Enter max event count',
       validateInput: (v) => {
-        const n = parseFloat(v);
-        return isNaN(n) || n <= 0 ? 'Enter a positive number' : null;
+        const n = parseInt(v, 10);
+        return !Number.isInteger(n) || n <= 0 ? 'Enter a positive integer' : null;
       },
     });
     if (input == null) return;
-    maxCost = parseFloat(input);
-  } else {
-    maxCost = choice.value;
+    maxEvents = parseInt(input, 10);
   }
 
-  setLimit(cid, { maxCost }, storePathOverride);
-  vscode.window.showInformationMessage(`Limit set: $${maxCost} for conversation ${cid.slice(0, 8)}...`);
+  const limits = getLimits(storePathOverride);
+  const existing = limits[cid] ?? {};
+  const limit: { maxCost?: number; maxEvents?: number } = { ...existing };
+  if (maxCost !== undefined) limit.maxCost = maxCost;
+  if (maxEvents !== undefined) limit.maxEvents = maxEvents;
+
+  setLimit(cid, limit, storePathOverride);
+
+  const parts: string[] = [];
+  if (limit.maxCost != null) parts.push(`$${limit.maxCost}`);
+  if (limit.maxEvents != null) parts.push(`${limit.maxEvents} events`);
+  const msg =
+    parts.length > 0
+      ? isGlobal
+        ? `Global limit set: ${parts.join(' and ')} per conversation.`
+        : `Limit set: ${parts.join(' and ')} for conversation ${cid.slice(0, 8)}...`
+      : isGlobal
+        ? 'Global limit updated.'
+        : `Limit updated for conversation ${cid.slice(0, 8)}...`;
+  vscode.window.showInformationMessage(msg);
 }

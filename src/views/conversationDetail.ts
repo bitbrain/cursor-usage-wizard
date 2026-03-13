@@ -1,6 +1,14 @@
 import * as vscode from 'vscode';
 import type { ConversationUsage } from '../services/usageStore';
-import { getLimits } from '../services/usageStore';
+import { getLimits, getTitles, GLOBAL_LIMIT_KEY } from '../services/usageStore';
+
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
 
 export class ConversationDetailProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = 'cursorUsageWizard.conversationDetail';
@@ -45,10 +53,14 @@ export class ConversationDetailProvider implements vscode.WebviewViewProvider {
       ? this._conversations.find((c) => c.conversationId === this._selectedId)
       : undefined;
     const limits = getLimits(this._storePathOverride);
-    const limit = this._selectedId ? limits[this._selectedId] : undefined;
+    const limit = this._selectedId
+      ? limits[this._selectedId] || limits[GLOBAL_LIMIT_KEY]
+      : undefined;
+    const titles = getTitles(this._storePathOverride);
+    const title = this._selectedId ? titles[this._selectedId] : undefined;
 
     const html = conv
-      ? this._buildDetailHtml(conv, limit)
+      ? this._buildDetailHtml(conv, limit, title)
       : '<p style="padding: 0.5rem; color: var(--vscode-descriptionForeground);">Select a conversation above to see usage.</p>';
 
     this._view.webview.html = `<!DOCTYPE html>
@@ -63,19 +75,24 @@ export class ConversationDetailProvider implements vscode.WebviewViewProvider {
 </html>`;
   }
 
-  private _buildDetailHtml(conv: ConversationUsage, limit: { maxCost?: number; maxEvents?: number } | undefined): string {
+  private _buildDetailHtml(
+    conv: ConversationUsage,
+    limit: { maxCost?: number; maxEvents?: number } | undefined,
+    title?: string
+  ): string {
+    const heading = title || conv.conversationId.slice(0, 12) + '...';
     const costStr = `~$${conv.estimatedCost.toFixed(2)}`;
-    const limitStr =
-      limit?.maxCost != null
-        ? ` (limit: $${limit.maxCost})`
-        : '';
+    const limitParts: string[] = [];
+    if (limit?.maxCost != null) limitParts.push(`$${limit.maxCost}`);
+    if (limit?.maxEvents != null) limitParts.push(`${limit.maxEvents} events`);
+    const limitStr = limitParts.length > 0 ? ` (limit: ${limitParts.join(' / ')})` : '';
     const setLimitArgs = encodeURIComponent(JSON.stringify([conv.conversationId]));
     const setLimitHref = `command:cursorUsageWizard.setConversationLimit?${setLimitArgs}`;
     return `
-      <p><strong>Conversation</strong></p>
+      <p><strong>${escapeHtml(heading)}</strong></p>
       <p class="cost">${costStr}${limitStr}</p>
       <p>${conv.eventCount} events · ${conv.source}</p>
-      <p><a href="${setLimitHref}">Set cost limit</a></p>
+      <p><a href="${setLimitHref}">Set limit</a></p>
     `;
   }
 }

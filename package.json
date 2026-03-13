@@ -1,6 +1,6 @@
 {
   "name": "cursor-usage-wizard",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "description": "Monitor Cursor usage per conversation with status bar, limits, and light-weight cost estimation.",
   "main": "./out/extension.js",
   "scripts": {
@@ -153,6 +153,12 @@
           "type": "boolean",
           "default": true,
           "description": "Show the current (active) conversation's cost in the status bar when available (from hook activity), otherwise the latest conversation (e.g. '~$0.42').",
+          "scope": "window"
+        },
+        "cursorUsageWizard.usageAnimations": {
+          "type": "boolean",
+          "default": true,
+          "description": "Animate status bar numbers (count-up) and pulse in red when a value changes.",
           "scope": "window"
         }
       }

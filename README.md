@@ -1,6 +1,6 @@
 ![Cursor Usage Wizard](media/banner.webp)
 
-[![Version](https://img.shields.io/badge/version-0.2.2-blue.svg)](https://github.com/bitbrain/cursor-usage-wizard)
+[![Version](https://img.shields.io/badge/version-0.2.3-blue.svg)](https://github.com/bitbrain/cursor-usage-wizard)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 **Cursor Usage Wizard** shows your Cursor usage and estimated cost in the status bar, tracks usage per conversation (Agent + Tab), and lets you set per-conversation limits so you stay in control of spend.
@@ -25,7 +25,7 @@ Event counts and estimated cost per conversation, with **Agent** (Cmd+K) and **T
 
 ### 🛡️ Per-conversation limits
 
-Set a cost or event limit per conversation. When the limit is exceeded, the `beforeSubmitPrompt` hook blocks further prompts until you change or clear the limit. Set limits from the command palette or via **Set cost limit for this conversation** in the conversation tree context menu.
+Set a cost or event limit per conversation. Cost and event limits are both set from the same **Set Conversation Limit** flow (command palette or context menu). When the limit is exceeded, the `beforeSubmitPrompt` hook blocks further prompts until you change or clear the limit. Set limits from the command palette or via **Set cost limit for this conversation** in the conversation tree context menu.
 
 ### 💰 Cost estimation
 

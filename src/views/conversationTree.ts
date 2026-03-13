@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { readUsageEvents, getLimits, type ConversationUsage } from '../services/usageStore';
+import { readUsageEvents, getLimits, getTitles, GLOBAL_LIMIT_KEY, type ConversationUsage } from '../services/usageStore';
 
 export type ConversationNode = ConversationUsage;
 
@@ -9,6 +9,7 @@ export class ConversationTreeDataProvider implements vscode.TreeDataProvider<Con
 
   private conversations: ConversationUsage[] = [];
   private limits: Record<string, { maxCost?: number; maxEvents?: number }> = {};
+  private titles: Record<string, string> = {};
   private storePathOverride: string | undefined;
 
   constructor(storePathOverride?: string) {
@@ -22,6 +23,7 @@ export class ConversationTreeDataProvider implements vscode.TreeDataProvider<Con
   refresh(): void {
     this.conversations = readUsageEvents(this.storePathOverride);
     this.limits = getLimits(this.storePathOverride);
+    this.titles = getTitles(this.storePathOverride);
     this._onDidChangeTreeData.fire();
   }
 
@@ -33,19 +35,23 @@ export class ConversationTreeDataProvider implements vscode.TreeDataProvider<Con
   }
 
   getTreeItem(element: ConversationNode): vscode.TreeItem {
-    const short = element.conversationId.slice(0, 12);
+    const displayName = this.titles[element.conversationId] || element.conversationId.slice(0, 12) + '...';
+    const labelName = displayName.length > 50 ? displayName.slice(0, 47) + '...' : displayName;
     const costStr = `~$${element.estimatedCost.toFixed(2)}`;
     const eventsStr = `${element.eventCount} events`;
     const sourceTag = element.source === 'tab' ? '[tab]' : '[agent]';
-    const limit = this.limits[element.conversationId];
-    const limitStr = limit?.maxCost != null ? ` limit $${limit.maxCost}` : '';
+    const limit = this.limits[element.conversationId] || this.limits[GLOBAL_LIMIT_KEY];
+    const limitParts: string[] = [];
+    if (limit?.maxCost != null) limitParts.push(`$${limit.maxCost}`);
+    if (limit?.maxEvents != null) limitParts.push(`${limit.maxEvents} events`);
+    const limitStr = limitParts.length > 0 ? ` limit ${limitParts.join(' / ')}` : '';
 
     const item = new vscode.TreeItem(
-      `${short}... ${costStr} (${eventsStr}) ${sourceTag}${limitStr}`,
+      `${labelName} ${costStr} (${eventsStr}) ${sourceTag}${limitStr}`,
       vscode.TreeItemCollapsibleState.None
     );
     item.contextValue = 'conversationNode';
-    item.tooltip = `${element.conversationId}\n${costStr} · ${eventsStr} · ${element.source}${limitStr}`;
+    item.tooltip = `${displayName}\n${element.conversationId}\n${costStr} · ${eventsStr} · ${element.source}${limitStr}`;
     item.description = eventsStr;
     item.iconPath = new vscode.ThemeIcon(
       element.source === 'tab' ? 'edit' : 'comment-discussion'

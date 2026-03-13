@@ -17,11 +17,42 @@ import {
   setActiveConversationId,
   readUsageEvents,
   getActiveConversationId,
+  getLimits,
+  getTitles,
+  GLOBAL_LIMIT_KEY,
 } from './services/usageStore';
 import type { ConversationUsage } from './services/usageStore';
 
 let statusBarItems: ReturnType<typeof createUsageStatusBarItems>;
 let refreshInterval: NodeJS.Timeout | undefined;
+
+/** Conversation IDs we've already shown a global-limit warning for this session (avoid spam). */
+const notifiedOverLimit = new Set<string>();
+
+function checkGlobalLimitAlerts(
+  conversations: ConversationUsage[],
+  storePathOverride: string | undefined
+): void {
+  const limits = getLimits(storePathOverride);
+  const global = limits[GLOBAL_LIMIT_KEY];
+  if (!global || (global.maxCost == null && global.maxEvents == null)) return;
+  const titles = getTitles(storePathOverride);
+  for (const c of conversations) {
+    const overCost = global.maxCost != null && c.estimatedCost >= global.maxCost;
+    const overEvents = global.maxEvents != null && c.eventCount >= global.maxEvents;
+    if (!overCost && !overEvents) continue;
+    if (notifiedOverLimit.has(c.conversationId)) continue;
+    notifiedOverLimit.add(c.conversationId);
+    const name = titles[c.conversationId] || c.conversationId.slice(0, 12) + '...';
+    const msg =
+      overCost && overEvents
+        ? `"${name}" has exceeded the global limit ($${c.estimatedCost.toFixed(2)} >= $${global.maxCost}, ${c.eventCount} events >= ${global.maxEvents}).`
+        : overCost
+          ? `"${name}" has exceeded the global cost limit ($${c.estimatedCost.toFixed(2)} >= $${global.maxCost}).`
+          : `"${name}" has exceeded the global event limit (${c.eventCount} >= ${global.maxEvents}).`;
+    vscode.window.showWarningMessage(msg);
+  }
+}
 
 export function activate(context: vscode.ExtensionContext): void {
   try {
@@ -69,6 +100,7 @@ export function activate(context: vscode.ExtensionContext): void {
         config.get<boolean>('showLatestInStatusBar', true),
         getActiveConversationId(storePathOverride)
       );
+      checkGlobalLimitAlerts(conversations, storePathOverride);
     };
 
     context.subscriptions.push(
@@ -148,6 +180,7 @@ export function activate(context: vscode.ExtensionContext): void {
           config.get<boolean>('showLatestInStatusBar', true),
           getActiveConversationId(storePathOverride)
         );
+        checkGlobalLimitAlerts(conversations, storePathOverride);
       });
       context.subscriptions.push(watcherDisposable);
 
