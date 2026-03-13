@@ -8,6 +8,7 @@ const os = require('os');
 const USAGE_DIR = path.join(os.homedir(), '.cursor', 'usage-wizard');
 const USAGE_FILE = path.join(USAGE_DIR, 'usage.jsonl');
 const LIMITS_FILE = path.join(USAGE_DIR, 'limits.json');
+const ACTIVE_CONVERSATION_FILE = path.join(USAGE_DIR, 'active-conversation.json');
 
 const MODEL_COSTS = {
   'claude-opus': 0.025,
@@ -68,6 +69,15 @@ process.stdin.on('end', () => {
       process.exit(0);
       return;
     }
+
+    if (!fs.existsSync(USAGE_DIR)) {
+      fs.mkdirSync(USAGE_DIR, { recursive: true });
+    }
+    fs.writeFileSync(
+      ACTIVE_CONVERSATION_FILE,
+      JSON.stringify({ conversationId, ts: Date.now() }),
+      'utf8'
+    );
 
     const limits = getLimits();
     const limit = limits[conversationId];

@@ -1,50 +1,99 @@
-# Cursor Usage Wizard
+![Cursor Usage Wizard](media/banner.webp)
 
-A Cursor extension that monitors usage per conversation with status bar display, per-conversation limits, and light-weight cost estimation.
+[![Version](https://img.shields.io/badge/version-0.2.2-blue.svg)](https://github.com/bitbrain/cursor-usage-wizard)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-## Features
+**Cursor Usage Wizard** shows your Cursor usage and estimated cost in the status bar, tracks usage per conversation (Agent + Tab), and lets you set per-conversation limits so you stay in control of spend.
 
-- **Status bar**: Total premium requests and optional cost display
-- **Per-conversation tracking**: Event counts and estimated cost via Cursor hooks
-- **Per-conversation limits**: Set cost or event limits; prompts are blocked when exceeded
-- **Agent + Tab**: Tracks both Agent (Cmd+K) and Tab (inline) usage
+## 🚀 Quick start
 
-## Installation
+1. **Install** the extension from the [Open VSX](https://open-vsx.org/) or Cursor marketplace.
+2. **Set your session token**: run **Cursor Usage Wizard: Set Session Token** and paste your `WorkosCursorSessionToken` from [cursor.com](https://cursor.com) (DevTools → Application → Cookies).
+3. Usage appears in the **status bar**; open **Cursor Usage** in the sidebar for per-conversation breakdown and limits.
 
-1. Install from the extension marketplace (Open VSX / Cursor)
-2. Or: `code --install-extension cursor-usage-wizard-0.1.0.vsix`
+## ✨ Features
+
+### 📊 Status bar
+
+Total premium usage and breakdown at a glance: total usage %, auto-complete %, API pool, and on-demand usage. When available, the active (or latest) conversation’s estimated cost is shown (e.g. `~$0.42`). Background color warns at 75% and 90% usage. Hover any item for a detailed tooltip.
+
+![Status bar and current conversation tooltip](media/screenshot.webp)
+
+### 💬 Per-conversation tracking
+
+Event counts and estimated cost per conversation, with **Agent** (Cmd+K) and **Tab** (inline) usage tracked via Cursor hooks. The sidebar view **Cursor Usage → By conversation** lists all conversations with cost, event count, and source; **Details** shows a single conversation. Live tracking updates the list and detail view as you use Cursor.
+
+### 🛡️ Per-conversation limits
+
+Set a cost or event limit per conversation. When the limit is exceeded, the `beforeSubmitPrompt` hook blocks further prompts until you change or clear the limit. Set limits from the command palette or via **Set cost limit for this conversation** in the conversation tree context menu.
+
+### 💰 Cost estimation
+
+Lightweight model lookup table (no token counting). Plan-aware when the API exposes it, or set your tier with `cursorUsageWizard.planOverride` (`free`, `pro`, `pro_plus`, `ultra`).
+
+## 📦 Installation
+
+1. Install from the [Open VSX](https://open-vsx.org/) or Cursor extension marketplace.
+2. Or install from VSIX: `code --install-extension cursor-usage-wizard-0.2.1.vsix`
 
 On first activation, the extension installs hooks into `~/.cursor/hooks.json` and copies scripts to `~/.cursor/usage-wizard/`.
 
-**Authentication:** Run **Cursor Usage Wizard: Set Session Token** and paste your `WorkosCursorSessionToken` cookie from [cursor.com](https://cursor.com) (DevTools → Application → Cookies). The token is stored securely in VS Code's secret storage.
+**🔑 Authentication:** Run **Cursor Usage Wizard: Set Session Token** and paste your `WorkosCursorSessionToken` cookie from [cursor.com](https://cursor.com) (DevTools → Application → Cookies). The token is stored in VS Code’s secret storage and is used only to request usage from Cursor’s API.
 
-## Commands
+## ⚙️ How it works
 
-- **Cursor Usage Wizard: Set Session Token** – Paste session cookie to enable usage fetching
-- **Cursor Usage Wizard: Clear Session Token** – Remove stored token
-- **Cursor Usage Wizard: Show Usage** – Refresh and show usage
-- **Cursor Usage Wizard: Show Conversations** – List conversations with usage, set limits
-- **Cursor Usage Wizard: Set Conversation Limit** – Set limit for a conversation
-- **Cursor Usage Wizard: Refresh Stats** – Manual refresh
+```mermaid
+flowchart LR
+  A[Session token] --> B[Extension]
+  B --> C[Cursor usage API]
+  H[Hooks] --> D[usage.jsonl]
+  D --> B
+  B --> E[Status bar + Sidebar]
+  F[limits.json] --> G[beforeSubmitPrompt]
+```
 
-## Configuration
-
-- `cursorUsageWizard.refreshInterval` – Refresh interval in seconds (default: 30)
-- `cursorUsageWizard.showPerConversationInStatusBar` – Show conversation count in status bar
-- `cursorUsageWizard.usageStorePath` – Override `~/.cursor/usage-wizard/` path
-- `cursorUsageWizard.planOverride` – Plan tier if API doesn't expose it: `auto` | `free` | `pro` | `pro_plus` | `ultra`
-
-## Troubleshooting
-
-**"Unable to fetch"** – Open **View → Output**, choose **Cursor Usage Wizard**. The log shows each request (URL, status, content-type, body length and preview), so you can see whether the dashboard returns 200, a redirect, or HTML and why parsing might fail.
-
-## How It Works
-
-1. **Extension** uses your session token (from the Set Session Token command) to fetch usage from Cursor's API.
-2. **Hooks** (installed to `~/.cursor/hooks.json`) append events to `~/.cursor/usage-wizard/usage.jsonl`.
+1. **Extension** uses your session token (from the Set Session Token command) to fetch usage from Cursor’s API.
+2. **Hooks** (in `~/.cursor/hooks.json`) append events to `~/.cursor/usage-wizard/usage.jsonl`.
 3. **Cost estimation** uses a simple model lookup table (no token parsing).
 4. **Limits** are stored in `~/.cursor/usage-wizard/limits.json` and enforced by the `beforeSubmitPrompt` hook.
 
-## License
+**🔒 Privacy:** Your session token is stored in VS Code’s secret storage and used only to request usage from Cursor’s API. The extension does not send data elsewhere and does not use telemetry.
+
+## ⌨️ Commands
+
+| Command | Description |
+|--------|-------------|
+| **Cursor Usage Wizard: Set Session Token** | Paste session cookie to enable usage fetching |
+| **Cursor Usage Wizard: Clear Session Token** | Remove stored token |
+| **Cursor Usage Wizard: Show Usage** | Refresh and show usage |
+| **Cursor Usage Wizard: Show Conversations** | Open sidebar and list conversations with usage and limits |
+| **Cursor Usage Wizard: Set Conversation Limit** | Set limit for a conversation |
+| **Cursor Usage Wizard: Refresh Stats** | Manual refresh of status bar and data |
+| **Set cost limit for this conversation** | Context menu on a conversation in the tree |
+
+## ⚙️ Configuration
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `cursorUsageWizard.refreshInterval` | `30` | How often to refresh stats (seconds). Minimum 5. |
+| `cursorUsageWizard.showPerConversationInStatusBar` | `false` | Show per-conversation count in status bar |
+| `cursorUsageWizard.showLatestInStatusBar` | `true` | Show active or latest conversation cost in status bar |
+| `cursorUsageWizard.usageStorePath` | `""` | Override usage store path; empty = `~/.cursor/usage-wizard/` |
+| `cursorUsageWizard.planOverride` | `"auto"` | Plan tier when API doesn’t expose it: `auto` \| `free` \| `pro` \| `pro_plus` \| `ultra` |
+| `cursorUsageWizard.liveTrackingEnabled` | `true` | Watch `usage.jsonl` and refresh conversation list and detail view live |
+
+## 🔧 Troubleshooting
+
+**"Unable to fetch"** — Open **View → Output**, choose **Cursor Usage Wizard**. The log shows each request (URL, status, content-type, body length and preview) so you can see whether the dashboard returns 200, a redirect, or HTML and why parsing might fail.
+
+**Wrong or missing usage** — If your plan isn’t detected, set `cursorUsageWizard.planOverride` to your tier: `free`, `pro`, `pro_plus`, or `ultra`.
+
+**Token expired** — Re-run **Cursor Usage Wizard: Set Session Token** with a fresh cookie from [cursor.com](https://cursor.com) (DevTools → Application → Cookies).
+
+## 📄 License
 
 MIT
+
+---
+
+**🔗 Source:** [github.com/bitbrain/cursor-usage-wizard](https://github.com/bitbrain/cursor-usage-wizard)

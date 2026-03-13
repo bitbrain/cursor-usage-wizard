@@ -1,10 +1,24 @@
 {
   "name": "cursor-usage-wizard",
-  "displayName": "Cursor Usage Wizard",
+  "version": "0.2.2",
   "description": "Monitor Cursor usage per conversation with status bar, limits, and light-weight cost estimation.",
-  "version": "0.2.0",
+  "main": "./out/extension.js",
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "package": "npm install && npm run compile && npx @vscode/vsce package",
+    "vscode:prepublish": "npm run compile"
+  },
+  "dependencies": {
+    "axios": "^1.6.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.70.0",
+    "typescript": "^5.0.0"
+  },
   "publisher": "bitbrain",
-  "icon": "media/icon.png",
+  "icon": "media/icon.webp",
   "repository": {
     "type": "git",
     "url": "https://github.com/bitbrain/cursor-usage-wizard"
@@ -26,7 +40,6 @@
   "activationEvents": [
     "*"
   ],
-  "main": "./out/extension.js",
   "contributes": {
     "commands": [
       {
@@ -58,8 +71,49 @@
         "command": "cursorUsageWizard.refreshStats",
         "title": "Cursor Usage Wizard: Refresh Stats",
         "icon": "$(sync)"
+      },
+      {
+        "command": "cursorUsageWizard.setLimitForConversation",
+        "title": "Set cost limit for this conversation",
+        "icon": "$(dollar)"
       }
     ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "cursorUsageWizard.conversations",
+          "title": "Cursor Usage",
+          "icon": "$(graph)"
+        }
+      ]
+    },
+    "views": {
+      "cursorUsageWizard.conversations": [
+        {
+          "id": "cursorUsageWizard.conversationUsage",
+          "name": "By conversation"
+        },
+        {
+          "id": "cursorUsageWizard.conversationDetail",
+          "name": "Details",
+          "type": "webview"
+        }
+      ]
+    },
+    "menus": {
+      "view/title": [
+        {
+          "command": "cursorUsageWizard.refreshStats",
+          "when": "view == cursorUsageWizard.conversationUsage"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "cursorUsageWizard.setLimitForConversation",
+          "when": "view == cursorUsageWizard.conversationUsage && viewItem == conversationNode"
+        }
+      ]
+    },
     "configuration": {
       "title": "Cursor Usage Wizard",
       "properties": {
@@ -88,22 +142,21 @@
           "enum": ["auto", "free", "pro", "pro_plus", "ultra"],
           "description": "Plan tier when API does not expose it. Use 'auto' to infer from API.",
           "scope": "window"
+        },
+        "cursorUsageWizard.liveTrackingEnabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Watch usage.jsonl for changes and refresh the conversation list and detail view live.",
+          "scope": "window"
+        },
+        "cursorUsageWizard.showLatestInStatusBar": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show the current (active) conversation's cost in the status bar when available (from hook activity), otherwise the latest conversation (e.g. '~$0.42').",
+          "scope": "window"
         }
       }
     }
-  },
-  "scripts": {
-    "vscode:prepublish": "npm run compile",
-    "compile": "tsc -p ./",
-    "watch": "tsc -watch -p ./"
-  },
-  "devDependencies": {
-    "@types/node": "^20.0.0",
-    "@types/vscode": "^1.70.0",
-    "typescript": "^5.0.0"
-  },
-  "dependencies": {
-    "axios": "^1.6.0"
   },
   "extensionKind": [
     "ui"

@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { createUsageStatusBarItems } from './handlers/statusBar';
+import { createUsageStatusBarItems, updateLatestStatusBarItem } from './handlers/statusBar';
 import { updateStats } from './utils/updateStats';
 import { installHooks } from './services/hooks';
 import { showConversations, setConversationLimit } from './handlers/conversationView';
@@ -7,7 +7,18 @@ import {
   setSessionToken as storeSessionToken,
   clearSessionToken as deleteSessionToken,
 } from './services/tokenStore';
-import { initLogger } from './utils/logger';
+import { initLogger, log } from './utils/logger';
+import { ConversationTreeDataProvider } from './views/conversationTree';
+import { ConversationDetailProvider } from './views/conversationDetail';
+import {
+  watchUsageFile,
+  watchActiveConversationFile,
+  watchAgentTranscripts,
+  setActiveConversationId,
+  readUsageEvents,
+  getActiveConversationId,
+} from './services/usageStore';
+import type { ConversationUsage } from './services/usageStore';
 
 let statusBarItems: ReturnType<typeof createUsageStatusBarItems>;
 let refreshInterval: NodeJS.Timeout | undefined;
@@ -16,9 +27,49 @@ export function activate(context: vscode.ExtensionContext): void {
   try {
     initLogger();
     statusBarItems = createUsageStatusBarItems();
-    context.subscriptions.push(statusBarItems.total, statusBarItems.auto, statusBarItems.api, statusBarItems.onDemand);
+    context.subscriptions.push(
+      statusBarItems.total,
+      statusBarItems.auto,
+      statusBarItems.api,
+      statusBarItems.onDemand,
+      statusBarItems.latest
+    );
+
+    const config = vscode.workspace.getConfiguration('cursorUsageWizard');
+    const storePathOverride = (config.get<string>('usageStorePath') || '').trim() || undefined;
+
+    const treeProvider = new ConversationTreeDataProvider(storePathOverride);
+    const detailProvider = new ConversationDetailProvider(storePathOverride);
+
+    const conversationTreeView = vscode.window.createTreeView('cursorUsageWizard.conversationUsage', {
+      treeDataProvider: treeProvider,
+    });
+    context.subscriptions.push(conversationTreeView);
+    conversationTreeView.onDidChangeSelection((e) => {
+      const node = e.selection[0];
+      detailProvider.setSelection(node?.conversationId);
+    });
+
+    context.subscriptions.push(
+      vscode.window.registerWebviewViewProvider(
+        ConversationDetailProvider.viewType,
+        detailProvider
+      )
+    );
 
     const doRefresh = () => updateStats(statusBarItems, context);
+
+    const refreshConversationViews = () => {
+      const conversations = readUsageEvents(storePathOverride);
+      treeProvider.refresh();
+      detailProvider.setConversations(conversations);
+      updateLatestStatusBarItem(
+        statusBarItems.latest,
+        conversations,
+        config.get<boolean>('showLatestInStatusBar', true),
+        getActiveConversationId(storePathOverride)
+      );
+    };
 
     context.subscriptions.push(
       vscode.commands.registerCommand('cursorUsageWizard.setSessionToken', async () => {
@@ -44,10 +95,22 @@ export function activate(context: vscode.ExtensionContext): void {
       vscode.commands.registerCommand('cursorUsageWizard.showConversations', () =>
         showConversations(context)
       ),
-      vscode.commands.registerCommand('cursorUsageWizard.setConversationLimit', () =>
-        setConversationLimit()
+      vscode.commands.registerCommand(
+        'cursorUsageWizard.setConversationLimit',
+        (convId?: string) => setConversationLimit(convId, storePathOverride)
       ),
-      vscode.commands.registerCommand('cursorUsageWizard.refreshStats', () => doRefresh())
+      vscode.commands.registerCommand(
+        'cursorUsageWizard.setLimitForConversation',
+        (node: ConversationUsage) => {
+          if (node?.conversationId) {
+            setConversationLimit(node.conversationId, storePathOverride);
+          }
+        }
+      ),
+      vscode.commands.registerCommand('cursorUsageWizard.refreshStats', () => {
+        doRefresh();
+        refreshConversationViews();
+      })
     );
 
     statusBarItems.total.command = 'cursorUsageWizard.refreshStats';
@@ -60,16 +123,65 @@ export function activate(context: vscode.ExtensionContext): void {
       // Non-fatal
     }
 
-    const config = vscode.workspace.getConfiguration('cursorUsageWizard');
     const intervalSeconds = Math.max(config.get<number>('refreshInterval', 30), 5);
 
     doRefresh();
-    refreshInterval = setInterval(doRefresh, intervalSeconds * 1000);
+    refreshConversationViews();
+
+    refreshInterval = setInterval(() => {
+      doRefresh();
+      refreshConversationViews();
+    }, intervalSeconds * 1000);
     context.subscriptions.push({
       dispose: () => {
         if (refreshInterval) clearInterval(refreshInterval);
       },
     });
+
+    if (config.get<boolean>('liveTrackingEnabled', true)) {
+      const watcherDisposable = watchUsageFile(storePathOverride, (conversations: ConversationUsage[]) => {
+        treeProvider.refresh();
+        detailProvider.setConversations(conversations);
+        updateLatestStatusBarItem(
+          statusBarItems.latest,
+          conversations,
+          config.get<boolean>('showLatestInStatusBar', true),
+          getActiveConversationId(storePathOverride)
+        );
+      });
+      context.subscriptions.push(watcherDisposable);
+
+      const activeWatcher = watchActiveConversationFile(storePathOverride, () => {
+        const conversations = readUsageEvents(storePathOverride);
+        updateLatestStatusBarItem(
+          statusBarItems.latest,
+          conversations,
+          config.get<boolean>('showLatestInStatusBar', true),
+          getActiveConversationId(storePathOverride)
+        );
+      });
+      context.subscriptions.push(activeWatcher);
+
+      try {
+        const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        const transcriptWatcher = watchAgentTranscripts(
+          workspaceRoot,
+          storePathOverride,
+          (conversationId) => {
+            setActiveConversationId(conversationId, storePathOverride);
+          }
+        );
+        context.subscriptions.push(transcriptWatcher);
+        if (workspaceRoot) {
+          log('Transcript watcher active for current workspace.');
+        }
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        log(`Transcript watcher skipped: ${msg}`);
+      }
+    }
+
+    log('Cursor Usage Wizard activated.');
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     vscode.window.showErrorMessage(`Cursor Usage Wizard failed to activate: ${msg}`);
@@ -83,4 +195,5 @@ export function deactivate(): void {
   statusBarItems?.auto.dispose();
   statusBarItems?.api.dispose();
   statusBarItems?.onDemand.dispose();
+  statusBarItems?.latest.dispose();
 }

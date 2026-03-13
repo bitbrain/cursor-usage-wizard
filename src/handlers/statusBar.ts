@@ -6,18 +6,23 @@ export function createStatusBarItem(): vscode.StatusBarItem {
   return vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
 }
 
-/** Four separate items: total %, auto (included) %, API pool, on-demand (each with its own hover). */
+// Priorities 0–4 so this extension's items stay grouped and appear last (rightmost) in the status bar.
+const SB_PRIORITY_GROUP = { total: 4, auto: 3, api: 2, onDemand: 1, latest: 0 };
+
+/** Five separate items: total %, auto %, API pool, on-demand, and latest conversation (each with its own hover). */
 export function createUsageStatusBarItems(): {
   total: vscode.StatusBarItem;
   auto: vscode.StatusBarItem;
   api: vscode.StatusBarItem;
   onDemand: vscode.StatusBarItem;
+  latest: vscode.StatusBarItem;
 } {
   return {
-    total: vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 103),
-    auto: vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 102),
-    api: vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 101),
-    onDemand: vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100),
+    total: vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, SB_PRIORITY_GROUP.total),
+    auto: vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, SB_PRIORITY_GROUP.auto),
+    api: vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, SB_PRIORITY_GROUP.api),
+    onDemand: vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, SB_PRIORITY_GROUP.onDemand),
+    latest: vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, SB_PRIORITY_GROUP.latest),
   };
 }
 
@@ -48,6 +53,7 @@ export interface UsageStatusBarItems {
   auto: vscode.StatusBarItem;
   api: vscode.StatusBarItem;
   onDemand: vscode.StatusBarItem;
+  latest: vscode.StatusBarItem;
 }
 
 function setNoUsageState(
@@ -72,6 +78,7 @@ function setNoUsageState(
   items.auto.hide();
   items.api.hide();
   items.onDemand.hide();
+  items.latest.hide();
 }
 
 export function updateStatusBar(
@@ -80,7 +87,11 @@ export function updateStatusBar(
   conversations?: ConversationUsage[],
   showPerConversation?: boolean,
   /** When true, token worked but usage could not be parsed (show "unavailable", do not prompt for token). */
-  authOkNoUsage?: boolean
+  authOkNoUsage?: boolean,
+  /** When true, show current/latest conversation cost in status bar (default true). */
+  showLatestInStatusBar?: boolean,
+  /** When set and present in conversations, show this as "Current conversation" instead of latest. */
+  activeConversationId?: string
 ): void {
   if (!usage) {
     setNoUsageState(items, !!authOkNoUsage);
@@ -132,6 +143,53 @@ export function updateStatusBar(
   } else {
     items.onDemand.hide();
   }
+
+  // Current/latest conversation — prefer active (from hooks) if in list, else most recent by lastTs
+  if (showLatestInStatusBar !== false && conversations && conversations.length > 0) {
+    const latest = conversations[0];
+    const activeConv = activeConversationId
+      ? conversations.find((c) => c.conversationId === activeConversationId)
+      : undefined;
+    const conv = activeConv ?? latest;
+    const costStr = `~$${conv.estimatedCost.toFixed(2)}`;
+    const label = activeConv ? 'Current conversation' : 'Latest conversation';
+    items.latest.text = `$(history) ${costStr}`;
+    items.latest.tooltip = new vscode.MarkdownString(
+      `**${label}**\n\n${conv.conversationId.slice(0, 16)}...\n${costStr} · ${conv.eventCount} events`
+    );
+    items.latest.command = 'cursorUsageWizard.refreshStats';
+    items.latest.color = undefined;
+    items.latest.show();
+  } else {
+    items.latest.hide();
+  }
+}
+
+/** Update only the current/latest conversation status bar segment (e.g. when usage.jsonl or active-conversation changes). */
+export function updateLatestStatusBarItem(
+  item: vscode.StatusBarItem,
+  conversations: ConversationUsage[],
+  showLatest: boolean,
+  activeConversationId?: string
+): void {
+  if (!showLatest || conversations.length === 0) {
+    item.hide();
+    return;
+  }
+  const latest = conversations[0];
+  const activeConv = activeConversationId
+    ? conversations.find((c) => c.conversationId === activeConversationId)
+    : undefined;
+  const conv = activeConv ?? latest;
+  const costStr = `~$${conv.estimatedCost.toFixed(2)}`;
+  const label = activeConv ? 'Current conversation' : 'Latest conversation';
+  item.text = `$(history) ${costStr}`;
+  item.tooltip = new vscode.MarkdownString(
+    `**${label}**\n\n${conv.conversationId.slice(0, 16)}...\n${costStr} · ${conv.eventCount} events`
+  );
+  item.command = 'cursorUsageWizard.refreshStats';
+  item.color = undefined;
+  item.show();
 }
 
 function buildFullTooltip(

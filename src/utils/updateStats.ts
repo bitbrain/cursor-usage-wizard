@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import { getSessionToken } from '../services/tokenStore';
 import { fetchNewUsage } from '../services/api';
 import { updateStatusBar, type UsageStatusBarItems } from '../handlers/statusBar';
-import { readUsageEvents } from '../services/usageStore';
+import { readUsageEvents, getActiveConversationId } from '../services/usageStore';
 
 export async function updateStats(
   items: UsageStatusBarItems,
@@ -36,6 +36,16 @@ export async function updateStats(
 
   const storePathOverride = config.get<string>('usageStorePath');
   const showPerConversation = config.get<boolean>('showPerConversationInStatusBar', false);
+  const showLatestInStatusBar = config.get<boolean>('showLatestInStatusBar', true);
   const conversations = readUsageEvents(storePathOverride);
-  updateStatusBar(items, usage, conversations, showPerConversation);
+  const activeConversationId = getActiveConversationId(storePathOverride);
+  updateStatusBar(
+    items,
+    usage,
+    conversations,
+    showPerConversation,
+    undefined,
+    showLatestInStatusBar,
+    activeConversationId
+  );
 }
