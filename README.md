@@ -5,6 +5,8 @@
 
 **Cursor Usage Wizard** shows your Cursor usage and estimated cost in the status bar, tracks usage per conversation (Agent + Tab), and lets you set per-conversation limits so you stay in control of spend.
 
+> **⚠️ Disclaimer:** The Cursor session token (cookie) is sensitive—**never share it or commit it anywhere** (repos, screenshots, logs, etc.). This extension is provided **as-is; use at your own risk**. The authors are not responsible for any misuse, data exposure, or account issues arising from use of this extension.
+
 ## 🚀 Quick start
 
 1. **Install** the extension from the [Open VSX](https://open-vsx.org/) or Cursor marketplace.
