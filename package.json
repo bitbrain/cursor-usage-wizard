@@ -1,0 +1,111 @@
+{
+  "name": "cursor-usage-wizard",
+  "displayName": "Cursor Usage Wizard",
+  "description": "Monitor Cursor usage per conversation with status bar, limits, and light-weight cost estimation.",
+  "version": "0.2.0",
+  "publisher": "bitbrain",
+  "icon": "media/icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/bitbrain/cursor-usage-wizard"
+  },
+  "engines": {
+    "vscode": "^1.70.0"
+  },
+  "categories": [
+    "Other",
+    "Visualization"
+  ],
+  "keywords": [
+    "cursor",
+    "usage",
+    "monitoring",
+    "cost",
+    "conversation"
+  ],
+  "activationEvents": [
+    "*"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "cursorUsageWizard.setSessionToken",
+        "title": "Cursor Usage Wizard: Set Session Token",
+        "icon": "$(key)"
+      },
+      {
+        "command": "cursorUsageWizard.clearSessionToken",
+        "title": "Cursor Usage Wizard: Clear Session Token",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "cursorUsageWizard.showUsage",
+        "title": "Cursor Usage Wizard: Show Usage",
+        "icon": "$(graph)"
+      },
+      {
+        "command": "cursorUsageWizard.showConversations",
+        "title": "Cursor Usage Wizard: Show Conversations",
+        "icon": "$(list-unordered)"
+      },
+      {
+        "command": "cursorUsageWizard.setConversationLimit",
+        "title": "Cursor Usage Wizard: Set Conversation Limit",
+        "icon": "$(dollar)"
+      },
+      {
+        "command": "cursorUsageWizard.refreshStats",
+        "title": "Cursor Usage Wizard: Refresh Stats",
+        "icon": "$(sync)"
+      }
+    ],
+    "configuration": {
+      "title": "Cursor Usage Wizard",
+      "properties": {
+        "cursorUsageWizard.refreshInterval": {
+          "type": "number",
+          "default": 30,
+          "minimum": 5,
+          "description": "How often to refresh stats (seconds).",
+          "scope": "window"
+        },
+        "cursorUsageWizard.showPerConversationInStatusBar": {
+          "type": "boolean",
+          "default": false,
+          "description": "Show per-conversation count in status bar.",
+          "scope": "window"
+        },
+        "cursorUsageWizard.usageStorePath": {
+          "type": "string",
+          "default": "",
+          "description": "Override usage store path. Leave empty for ~/.cursor/usage-wizard/",
+          "scope": "window"
+        },
+        "cursorUsageWizard.planOverride": {
+          "type": "string",
+          "default": "auto",
+          "enum": ["auto", "free", "pro", "pro_plus", "ultra"],
+          "description": "Plan tier when API does not expose it. Use 'auto' to infer from API.",
+          "scope": "window"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.70.0",
+    "typescript": "^5.0.0"
+  },
+  "dependencies": {
+    "axios": "^1.6.0"
+  },
+  "extensionKind": [
+    "ui"
+  ]
+}
