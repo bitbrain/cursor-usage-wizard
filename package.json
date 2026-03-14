@@ -1,14 +1,15 @@
 {
   "name": "cursor-usage-wizard",
   "displayName": "Cursor Usage Wizard",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Monitor Cursor usage per conversation with status bar, limits, and light-weight cost estimation.",
   "main": "./out/extension.js",
   "scripts": {
-    "compile": "tsc -p ./",
-    "watch": "tsc -watch -p ./",
+    "check-types": "tsc --noEmit",
+    "compile": "npm run check-types && vite build --mode development",
+    "watch": "npm run check-types && vite build --mode development --watch",
     "package": "npm install && npm run compile && npx @vscode/vsce package",
-    "vscode:prepublish": "npm run compile"
+    "vscode:prepublish": "npm run check-types && vite build --mode production"
   },
   "dependencies": {
     "axios": "^1.6.0"
@@ -16,7 +17,8 @@
   "devDependencies": {
     "@types/node": "^20.0.0",
     "@types/vscode": "^1.70.0",
-    "typescript": "^5.0.0"
+    "typescript": "^5.0.0",
+    "vite": "^6.0.0"
   },
   "publisher": "bitbrain",
   "icon": "media/icon.webp",
@@ -39,7 +41,16 @@
     "conversation"
   ],
   "activationEvents": [
-    "*"
+    "onStartupFinished",
+    "onCommand:cursorUsageWizard.setSessionToken",
+    "onCommand:cursorUsageWizard.clearSessionToken",
+    "onCommand:cursorUsageWizard.showUsage",
+    "onCommand:cursorUsageWizard.showConversations",
+    "onCommand:cursorUsageWizard.setConversationLimit",
+    "onCommand:cursorUsageWizard.refreshStats",
+    "onCommand:cursorUsageWizard.setLimitForConversation",
+    "onView:cursorUsageWizard.conversationUsage",
+    "onView:cursorUsageWizard.conversationDetail"
   ],
   "contributes": {
     "commands": [
