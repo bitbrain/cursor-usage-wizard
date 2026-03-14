@@ -6,7 +6,7 @@ on:
 
 jobs:
   publish:
-    name: Publish to VS Code Marketplace
+    name: Publish to VS Code Marketplace and Open VSX
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -16,8 +16,19 @@ jobs:
           cache: "npm"
       - run: npm ci
       - run: npm run compile
+      - name: Set version
+        id: version
+        run: echo "version=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
+      - name: Package extension
+        run: npx @vscode/vsce package --no-dependencies
+      - name: Publish to Open VSX (for Cursor)
+        uses: HaaLeo/publish-vscode-extension@v2
+        with:
+          pat: ${{ secrets.OPEN_VSX_TOKEN }}
+          extensionFile: cursor-usage-wizard-${{ steps.version.outputs.version }}.vsix
       - name: Publish to Visual Studio Marketplace
         uses: HaaLeo/publish-vscode-extension@v2
         with:
           pat: ${{ secrets.VS_MARKETPLACE_TOKEN }}
           registryUrl: https://marketplace.visualstudio.com
+          extensionFile: cursor-usage-wizard-${{ steps.version.outputs.version }}.vsix

@@ -1,6 +1,6 @@
 ![Cursor Usage Wizard](media/banner.webp)
 
-[![Version](https://img.shields.io/badge/version-0.2.3-blue.svg)](https://github.com/bitbrain/cursor-usage-wizard)
+[![Version](https://img.shields.io/badge/version-1.0.2-blue.svg)](https://github.com/bitbrain/cursor-usage-wizard)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 **Cursor Usage Wizard** shows your Cursor usage and estimated cost in the status bar, tracks usage per conversation (Agent + Tab), and lets you set per-conversation limits so you stay in control of spend.
@@ -94,7 +94,12 @@ flowchart LR
 
 ## Releasing
 
-**Extension CI** runs on every push and pull request (compile + `vsce package` to validate the extension). **Extension Release** runs only when you push a tag (e.g. `v0.3.0`) and publishes to the VS Code Marketplace. Ensure `package.json` version matches the tag. The release workflow uses the `VS_MARKETPLACE_TOKEN` repository secret (Azure DevOps PAT with Marketplace → Manage scope).
+**Extension CI** runs on every push and pull request (compile + `vsce package` to validate the extension). **Extension Release** runs only when you push a tag (e.g. `v0.3.0`) and publishes to both **Open VSX** (so Cursor can find the extension) and the **VS Code Marketplace**. Ensure `package.json` version matches the tag.
+
+Required repository secrets:
+
+- **`VS_MARKETPLACE_TOKEN`** — Azure DevOps PAT with Marketplace → Manage scope (for Visual Studio Marketplace).
+- **`OPEN_VSX_TOKEN`** — Open VSX access token (for Cursor / Open VSX). Create at [open-vsx.org](https://open-vsx.org); one-time namespace: `npx ovsx create-namespace bitbrain -p <token>`.
 
 ## 📄 License
 
