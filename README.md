@@ -9,7 +9,7 @@
 
 ## 🚀 Quick start
 
-1. **Install** the extension from the [Open VSX](https://open-vsx.org/) or Cursor marketplace.
+1. **Install** the extension from [Open VSX](https://open-vsx.org/extension/bitbrain/cursor-usage-wizard) (Cursor) or [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=bitbrain.cursor-usage-wizard).
 2. **Set your session token**: run **Cursor Usage Wizard: Set Session Token** and paste your `WorkosCursorSessionToken` from [cursor.com](https://cursor.com) (DevTools → Application → Cookies).
 3. Usage appears in the **status bar**; open **Cursor Usage** in the sidebar for per-conversation breakdown and limits.
 
@@ -35,7 +35,7 @@ Lightweight model lookup table (no token counting). Plan-aware when the API expo
 
 ## 📦 Installation
 
-1. Install from the [Open VSX](https://open-vsx.org/) or Cursor extension marketplace.
+1. Install from [Open VSX](https://open-vsx.org/extension/bitbrain/cursor-usage-wizard) (Cursor) or [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=bitbrain.cursor-usage-wizard).
 2. Or install from VSIX: `code --install-extension cursor-usage-wizard-0.2.1.vsix`
 
 On first activation, the extension installs hooks into `~/.cursor/hooks.json` and copies scripts to `~/.cursor/usage-wizard/`.
