@@ -1,7 +1,7 @@
 {
   "name": "cursor-usage-wizard",
   "displayName": "Cursor Usage Wizard",
-  "version": "0.3.0",
+  "version": "1.0.0",
   "description": "Monitor Cursor usage per conversation with status bar, limits, and light-weight cost estimation.",
   "main": "./out/extension.js",
   "scripts": {
