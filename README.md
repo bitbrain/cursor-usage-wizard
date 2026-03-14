@@ -92,6 +92,10 @@ flowchart LR
 
 **Token expired** — Re-run **Cursor Usage Wizard: Set Session Token** with a fresh cookie from [cursor.com](https://cursor.com) (DevTools → Application → Cookies).
 
+## Releasing
+
+**Extension CI** runs on every push and pull request (compile + `vsce package` to validate the extension). **Extension Release** runs only when you push a tag (e.g. `v0.3.0`) and publishes to the VS Code Marketplace. Ensure `package.json` version matches the tag. The release workflow uses the `VS_MARKETPLACE_TOKEN` repository secret (Azure DevOps PAT with Marketplace → Manage scope).
+
 ## 📄 License
 
 MIT
