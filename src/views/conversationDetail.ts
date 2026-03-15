@@ -81,7 +81,13 @@ export class ConversationDetailProvider implements vscode.WebviewViewProvider {
     title?: string
   ): string {
     const heading = title || conv.conversationId.slice(0, 12) + '...';
-    const costStr = `~$${conv.estimatedCost.toFixed(2)}`;
+    const turnsStr = `${conv.turnCount} LLM turn${conv.turnCount === 1 ? '' : 's'}`;
+    const costLine =
+      conv.deltaCents != null
+        ? `<p class="cost">$${(conv.deltaCents / 100).toFixed(2)} (from Cursor billing)</p>`
+        : conv.estimatedTokenCents != null
+          ? `<p class="cost">~$${(conv.estimatedTokenCents / 100).toFixed(2)}</p><p class="limit">Token-based estimate; does not account for caching.</p>`
+          : '<p class="limit">Cost unknown until session ends.</p>';
     const limitParts: string[] = [];
     if (limit?.maxCost != null) limitParts.push(`$${limit.maxCost}`);
     if (limit?.maxEvents != null) limitParts.push(`${limit.maxEvents} events`);
@@ -90,8 +96,8 @@ export class ConversationDetailProvider implements vscode.WebviewViewProvider {
     const setLimitHref = `command:cursorUsageWizard.setConversationLimit?${setLimitArgs}`;
     return `
       <p><strong>${escapeHtml(heading)}</strong></p>
-      <p class="cost">${costStr}${limitStr}</p>
-      <p>${conv.eventCount} events · ${conv.source}</p>
+      <p>${turnsStr} · ${conv.eventCount} events · ${conv.source}${limitStr}</p>
+      ${costLine}
       <p><a href="${setLimitHref}">Set limit</a></p>
     `;
   }

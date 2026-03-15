@@ -16,9 +16,13 @@ export default defineConfig(({ mode }) => ({
     outDir: 'out',
     emptyOutDir: true,
     lib: {
-      entry: resolve(__dirname, 'src/extension.ts'),
+      entry: {
+        extension: resolve(__dirname, 'src/extension.ts'),
+        'hooks/track': resolve(__dirname, 'src/hooks/track.ts'),
+        'hooks/limit': resolve(__dirname, 'src/hooks/limit.ts'),
+      },
       formats: ['cjs'],
-      fileName: () => 'extension.js',
+      fileName: (_, name) => (name === 'extension' ? 'extension.js' : `${name}.js`),
     },
     rollupOptions: {
       external: (id) => nodeBuiltins.includes(id) || id.startsWith('node:'),

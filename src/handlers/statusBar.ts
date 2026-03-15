@@ -6,10 +6,8 @@ import type { ConversationUsage } from '../services/usageStore';
 const TWEEN_DURATION_MS = 300;
 const TWEEN_STEP_MS = 16;
 
-const PULSE_TOTAL_MS = 1500;
-const PULSE_HOLD_PERCENT = 0.75;
-const PULSE_HOLD_MS = Math.round(PULSE_TOTAL_MS * PULSE_HOLD_PERCENT);
-const PULSE_FADE_MS = Math.round(PULSE_TOTAL_MS * (1 - PULSE_HOLD_PERCENT));
+const PULSE_FADE_MS = 1000;
+const PULSE_HOLD_MS = 500;
 const PULSE_FADE_STEP_MS = 16;
 
 let lastValues: {
@@ -20,6 +18,10 @@ let lastValues: {
   onDemandUsedCents?: number;
   latestCost?: number;
   latestConvId?: string;
+  /** True when latest segment shows real $ (deltaCents); false when showing turn count. */
+  latestIsDollars?: boolean;
+  /** True when showing token estimate instead of Cursor billing. */
+  latestIsEst?: boolean;
 } = {};
 const tweenTimeouts: Record<string, NodeJS.Timeout[]> = Object.create(null);
 /** Pulse: timeouts + item + restoreColor so we can restore when cleared or done. */
@@ -28,7 +30,7 @@ const pulseTimeouts: Record<string, {
   fadeStart?: NodeJS.Timeout;
   fadeSteps?: NodeJS.Timeout[];
   item?: vscode.StatusBarItem;
-  restoreColor?: vscode.ThemeColor | undefined;
+  restoreColor?: vscode.ThemeColor | string | undefined;
 }> = Object.create(null);
 
 function clearTweenTimeoutsForSegment(segmentKey: string): void {
@@ -39,7 +41,9 @@ function clearTweenTimeoutsForSegment(segmentKey: string): void {
   }
 }
 
-function restorePulseSegment(pulse: { item?: vscode.StatusBarItem; restoreColor?: vscode.ThemeColor | undefined }): void {
+function restorePulseSegment(
+  pulse: { item?: vscode.StatusBarItem; restoreColor?: vscode.ThemeColor | string | undefined }
+): void {
   if (pulse.item) pulse.item.color = pulse.restoreColor;
 }
 
@@ -60,6 +64,7 @@ function clearSegmentTimeouts(segmentKey: string): void {
 function clearAllAnimationTimeouts(): void {
   for (const key of Object.keys(tweenTimeouts)) clearSegmentTimeouts(key);
   for (const key of Object.keys(pulseTimeouts)) {
+    if (key === 'latest') continue; // Preserve latest pulse so 1s fade can complete
     const pulse = pulseTimeouts[key];
     if (pulse.flash) clearTimeout(pulse.flash);
     if (pulse.fadeStart) clearTimeout(pulse.fadeStart);
@@ -136,15 +141,28 @@ function runTweenCustom(
 const PULSE_WARNING_THEME = new vscode.ThemeColor('statusBarItem.warningBackground');
 /** Fade: from warning-like hex (can't read theme as hex) to end color. */
 const PULSE_FADE_START_HEX = '#d4a574';
-/** Fallback fade-end when item.color is not a hex (theme-controlled, we can't read resolved value). */
-const PULSE_FADE_END_HEX_FALLBACK = '#4b5563';
-
 const HEX_COLOR_REGEX = /^#[0-9A-Fa-f]{6}$/;
+
+function getDefaultStatusBarForegroundHex(): string {
+  switch (vscode.window.activeColorTheme.kind) {
+    case vscode.ColorThemeKind.Light:
+      return '#424242';
+    case vscode.ColorThemeKind.HighContrastLight:
+      return '#1f1f1f';
+    case vscode.ColorThemeKind.HighContrast:
+      return '#ffffff';
+    case vscode.ColorThemeKind.Dark:
+    default:
+      return '#d4d4d4';
+  }
+}
 
 /** If item currently has a hex color, use it as fade end (theme may have resolved it); else fallback. */
 function getFadeEndHex(item: vscode.StatusBarItem): string {
   const current = item.color;
-  return typeof current === 'string' && HEX_COLOR_REGEX.test(current) ? current : PULSE_FADE_END_HEX_FALLBACK;
+  return typeof current === 'string' && HEX_COLOR_REGEX.test(current)
+    ? current
+    : getDefaultStatusBarForegroundHex();
 }
 
 function hexToRgb(hex: string): [number, number, number] {
@@ -167,7 +185,7 @@ function mixHex(hex1: string, hex2: string, t: number): string {
 function startPulse(
   item: vscode.StatusBarItem,
   segmentKey: string,
-  restoreColor: vscode.ThemeColor | undefined
+  restoreColor: vscode.ThemeColor | string | undefined
 ): void {
   const fadeEndHex = getFadeEndHex(item);
   const existing = pulseTimeouts[segmentKey];
@@ -419,39 +437,62 @@ export function updateStatusBar(
     items.onDemand.hide();
   }
 
-  // Current/latest conversation
+  // Current/latest conversation: real cost (deltaCents), token estimate, or turn count
   if (showLatestInStatusBar !== false && conversations && conversations.length > 0) {
     const latest = conversations[0];
     const activeConv = activeConversationId
       ? conversations.find((c) => c.conversationId === activeConversationId)
       : undefined;
     const conv = activeConv ?? latest;
-    const cost = conv.estimatedCost;
-    const costStr = `~$${cost.toFixed(2)}`;
+    const deltaCents = conv.deltaCents;
+    const estimatedCents = conv.estimatedTokenCents;
+    const cents = deltaCents ?? estimatedCents;
+    const isDollars = cents != null;
+    const isEst = deltaCents == null && estimatedCents != null;
+    const displayNum = isDollars ? cents! / 100 : conv.turnCount;
+    const displayStr = isDollars
+      ? `$${displayNum.toFixed(2)}`
+      : `${conv.turnCount} turn${conv.turnCount === 1 ? '' : 's'}`;
     const label = activeConv ? 'Current conversation' : 'Latest conversation';
+    const tooltipDetail = isDollars
+      ? isEst
+        ? `Token-based estimate: ${displayStr}`
+        : `Cost from Cursor billing: ${displayStr}`
+      : `${conv.turnCount} LLM turns (cost unknown until session ends)`;
     items.latest.tooltip = new vscode.MarkdownString(
-      `**${label}**\n\n${conv.conversationId.slice(0, 16)}...\n${costStr} · ${conv.eventCount} events`
+      `**${label}**\n\n${conv.conversationId.slice(0, 16)}...\n${tooltipDetail} · ${conv.eventCount} events`
     );
     items.latest.command = 'cursorUsageWizard.refreshStats';
+    const latestColor = getDefaultStatusBarForegroundHex();
     const sameConv = lastValues.latestConvId === conv.conversationId;
-    if (!animationsOn || lastValues.latestCost === undefined || !sameConv) {
-      items.latest.text = `$(history) ${costStr}`;
-      items.latest.color = undefined;
-      lastValues.latestCost = cost;
+    const sameMode = lastValues.latestIsDollars === isDollars;
+    if (!animationsOn || lastValues.latestCost === undefined || !sameConv || !sameMode) {
+      items.latest.text = `$(comment-discussion) ${displayStr}`;
+      if (!pulseTimeouts['latest']) items.latest.color = latestColor;
+      lastValues.latestCost = displayNum;
       lastValues.latestConvId = conv.conversationId;
-    } else if (lastValues.latestCost !== cost) {
-      startPulse(items.latest, 'latest', undefined);
-      runTween('latest', lastValues.latestCost, cost, TWEEN_DURATION_MS, (n) => `~$${n.toFixed(2)}`, (formatted) => {
-        items.latest.text = `$(history) ${formatted}`;
+      lastValues.latestIsDollars = isDollars;
+      lastValues.latestIsEst = isEst;
+    } else if (lastValues.latestCost !== displayNum) {
+      if (!pulseTimeouts['latest']) startPulse(items.latest, 'latest', latestColor);
+      const formatter = isDollars
+        ? (n: number) => `$${n.toFixed(2)}`
+        : (n: number) => `${Math.round(n)} turn${Math.round(n) === 1 ? '' : 's'}`;
+      runTween('latest', lastValues.latestCost, displayNum, TWEEN_DURATION_MS, formatter, (formatted) => {
+        items.latest.text = `$(comment-discussion) ${formatted}`;
       }, () => {
-        lastValues.latestCost = cost;
+        lastValues.latestCost = displayNum;
         lastValues.latestConvId = conv.conversationId;
+        lastValues.latestIsDollars = isDollars;
+        lastValues.latestIsEst = isEst;
       });
     }
     items.latest.show();
   } else {
     lastValues.latestCost = undefined;
     lastValues.latestConvId = undefined;
+    lastValues.latestIsDollars = undefined;
+    lastValues.latestIsEst = undefined;
     items.latest.hide();
   }
 }
@@ -467,6 +508,8 @@ export function updateLatestStatusBarItem(
     clearSegmentTimeouts('latest');
     lastValues.latestCost = undefined;
     lastValues.latestConvId = undefined;
+    lastValues.latestIsDollars = undefined;
+    lastValues.latestIsEst = undefined;
     item.hide();
     return;
   }
@@ -475,30 +518,51 @@ export function updateLatestStatusBarItem(
     ? conversations.find((c) => c.conversationId === activeConversationId)
     : undefined;
   const conv = activeConv ?? latest;
-  const cost = conv.estimatedCost;
-  const costStr = `~$${cost.toFixed(2)}`;
+  const deltaCents = conv.deltaCents;
+  const estimatedCents = conv.estimatedTokenCents;
+  const cents = deltaCents ?? estimatedCents;
+  const isDollars = cents != null;
+  const isEst = deltaCents == null && estimatedCents != null;
+  const displayNum = isDollars ? cents / 100 : conv.turnCount;
+  const displayStr = isDollars
+    ? `$${displayNum.toFixed(2)}`
+    : `${conv.turnCount} turn${conv.turnCount === 1 ? '' : 's'}`;
   const label = activeConv ? 'Current conversation' : 'Latest conversation';
+  const tooltipDetail = isDollars
+    ? isEst
+      ? `Token-based estimate: ${displayStr}`
+      : `Cost from Cursor billing: ${displayStr}`
+    : `${conv.turnCount} LLM turns (cost unknown until session ends)`;
   item.tooltip = new vscode.MarkdownString(
-    `**${label}**\n\n${conv.conversationId.slice(0, 16)}...\n${costStr} · ${conv.eventCount} events`
+    `**${label}**\n\n${conv.conversationId.slice(0, 16)}...\n${tooltipDetail} · ${conv.eventCount} events`
   );
   item.command = 'cursorUsageWizard.refreshStats';
 
   const config = vscode.workspace.getConfiguration('cursorUsageWizard');
   const animationsOn = config.get<boolean>('usageAnimations', true);
+  const latestColor = getDefaultStatusBarForegroundHex();
   const sameConv = lastValues.latestConvId === conv.conversationId;
+  const sameMode = lastValues.latestIsDollars === isDollars;
 
-  if (!animationsOn || lastValues.latestCost === undefined || !sameConv) {
-    item.text = `$(history) ${costStr}`;
-    item.color = undefined;
-    lastValues.latestCost = cost;
+  if (!animationsOn || lastValues.latestCost === undefined || !sameConv || !sameMode) {
+    item.text = `$(comment-discussion) ${displayStr}`;
+    if (!pulseTimeouts['latest']) item.color = latestColor;
+    lastValues.latestCost = displayNum;
     lastValues.latestConvId = conv.conversationId;
-  } else if (lastValues.latestCost !== cost) {
-    startPulse(item, 'latest', undefined);
-    runTween('latest', lastValues.latestCost, cost, TWEEN_DURATION_MS, (n) => `~$${n.toFixed(2)}`, (formatted) => {
-      item.text = `$(history) ${formatted}`;
+    lastValues.latestIsDollars = isDollars;
+    lastValues.latestIsEst = isEst;
+  } else if (lastValues.latestCost !== displayNum) {
+    if (!pulseTimeouts['latest']) startPulse(item, 'latest', latestColor);
+    const formatter = isDollars
+      ? (n: number) => `$${n.toFixed(2)}`
+      : (n: number) => `${Math.round(n)} turn${Math.round(n) === 1 ? '' : 's'}`;
+    runTween('latest', lastValues.latestCost, displayNum, TWEEN_DURATION_MS, formatter, (formatted) => {
+      item.text = `$(comment-discussion) ${formatted}`;
     }, () => {
-      lastValues.latestCost = cost;
+      lastValues.latestCost = displayNum;
       lastValues.latestConvId = conv.conversationId;
+      lastValues.latestIsDollars = isDollars;
+      lastValues.latestIsEst = isEst;
     });
   }
   item.show();
@@ -533,10 +597,16 @@ function buildFullTooltip(
     lines.push('', `Resets: ${usage.resetDate}`);
   }
   if (showPerConversation && conversations && conversations.length > 0) {
-    lines.push('', '**Per-conversation (estimated)**');
+    lines.push('', '**Per-conversation**');
     for (const c of conversations.slice(0, 5)) {
       const short = c.conversationId.slice(0, 8);
-      lines.push(`- ${short}... ${c.eventCount} events, ~$${c.estimatedCost.toFixed(2)}`);
+      const costPart =
+        c.deltaCents != null
+          ? `$${(c.deltaCents / 100).toFixed(2)} (from Cursor)`
+          : c.estimatedTokenCents != null
+            ? `~$${(c.estimatedTokenCents / 100).toFixed(2)}`
+            : `${c.turnCount} turns`;
+      lines.push(`- ${short}... ${c.eventCount} events, ${costPart}`);
     }
     if (conversations.length > 5) {
       lines.push(`- ... and ${conversations.length - 5} more`);

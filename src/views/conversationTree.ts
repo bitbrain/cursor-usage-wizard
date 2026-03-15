@@ -37,7 +37,12 @@ export class ConversationTreeDataProvider implements vscode.TreeDataProvider<Con
   getTreeItem(element: ConversationNode): vscode.TreeItem {
     const displayName = this.titles[element.conversationId] || element.conversationId.slice(0, 12) + '...';
     const labelName = displayName.length > 50 ? displayName.slice(0, 47) + '...' : displayName;
-    const costStr = `~$${element.estimatedCost.toFixed(2)}`;
+    const turnsStr = `${element.turnCount} turn${element.turnCount === 1 ? '' : 's'}`;
+    const cents = element.deltaCents ?? element.estimatedTokenCents;
+    const costStr =
+      cents != null
+        ? ` · $${(cents / 100).toFixed(2)}`
+        : '';
     const eventsStr = `${element.eventCount} events`;
     const sourceTag = element.source === 'tab' ? '[tab]' : '[agent]';
     const limit = this.limits[element.conversationId] || this.limits[GLOBAL_LIMIT_KEY];
@@ -47,11 +52,17 @@ export class ConversationTreeDataProvider implements vscode.TreeDataProvider<Con
     const limitStr = limitParts.length > 0 ? ` limit ${limitParts.join(' / ')}` : '';
 
     const item = new vscode.TreeItem(
-      `${labelName} ${costStr} (${eventsStr}) ${sourceTag}${limitStr}`,
+      `${labelName} ${turnsStr}${costStr} (${eventsStr}) ${sourceTag}${limitStr}`,
       vscode.TreeItemCollapsibleState.None
     );
     item.contextValue = 'conversationNode';
-    item.tooltip = `${displayName}\n${element.conversationId}\n${costStr} · ${eventsStr} · ${element.source}${limitStr}`;
+    const costTooltip =
+      element.deltaCents != null
+        ? `$${(element.deltaCents / 100).toFixed(2)} (from Cursor billing)`
+        : element.estimatedTokenCents != null
+          ? `~$${(element.estimatedTokenCents / 100).toFixed(2)}`
+          : 'cost unknown until session ends';
+    item.tooltip = `${displayName}\n${element.conversationId}\n${turnsStr} · ${costTooltip} · ${eventsStr} · ${element.source}${limitStr}`;
     item.description = eventsStr;
     item.iconPath = new vscode.ThemeIcon(
       element.source === 'tab' ? 'edit' : 'comment-discussion'

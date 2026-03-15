@@ -4,7 +4,10 @@ import { getUsageStorePath } from '../utils/constants';
 
 export async function showConversations(context: vscode.ExtensionContext): Promise<void> {
   const config = vscode.workspace.getConfiguration('cursorUsageWizard');
-  const storePathOverride = config.get<string>('usageStorePath');
+  const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  const storePathOverride =
+    (config.get<string>('usageStorePath') || '').trim() ||
+    (workspaceRoot ? getUsageStorePath(undefined, workspaceRoot) : undefined);
   const storePath = getUsageStorePath(storePathOverride);
 
   const conversations = readUsageEvents(storePathOverride);
@@ -24,9 +27,16 @@ export async function showConversations(context: vscode.ExtensionContext): Promi
     const limitStr = limit
       ? ` [limit: $${limit.maxCost ?? '?'}/${limit.maxEvents ?? '?'}]`
       : '';
+    const cents = c.deltaCents ?? c.estimatedTokenCents;
+    const costStr =
+      cents != null
+        ? `$${(cents / 100).toFixed(2)}`
+        : c.turnCount > 0
+          ? `${c.turnCount} turn${c.turnCount === 1 ? '' : 's'}`
+          : '—';
     return {
       label: label.length > 60 ? label.slice(0, 57) + '...' : label,
-      description: `${c.eventCount} events, ~$${c.estimatedCost.toFixed(2)}${limitStr}`,
+      description: `${c.eventCount} events, ${costStr}${limitStr}`,
       detail: c.conversationId,
       conversationId: c.conversationId,
     };
@@ -42,13 +52,23 @@ export async function showConversations(context: vscode.ExtensionContext): Promi
   }
 }
 
+function getResolvedStorePathOverride(): string | undefined {
+  const config = vscode.workspace.getConfiguration('cursorUsageWizard');
+  const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  return (
+    (config.get<string>('usageStorePath') || '').trim() ||
+    (workspaceRoot ? getUsageStorePath(undefined, workspaceRoot) : undefined)
+  );
+}
+
 export async function setConversationLimit(
   conversationId?: string,
   storePathOverride?: string
 ): Promise<void> {
+  const resolvedOverride = storePathOverride ?? getResolvedStorePathOverride();
   const cid = conversationId;
   if (!cid) {
-    const conversations = readUsageEvents(storePathOverride);
+    const conversations = readUsageEvents(resolvedOverride);
     const scopeChoice = await vscode.window.showQuickPick(
       [
         { label: 'Global default (all conversations)', value: 'global' as const },
@@ -58,14 +78,13 @@ export async function setConversationLimit(
     );
     if (!scopeChoice) return;
     if (scopeChoice.value === 'global') {
-      return setConversationLimit(GLOBAL_LIMIT_KEY, storePathOverride);
+      return setConversationLimit(GLOBAL_LIMIT_KEY, resolvedOverride);
     }
     if (conversations.length === 0) {
       vscode.window.showWarningMessage('No conversations to set limit for.');
       return;
     }
-    const config = vscode.workspace.getConfiguration('cursorUsageWizard');
-    const titlesForPick = getTitles(storePathOverride);
+    const titlesForPick = getTitles(resolvedOverride);
     const selected = await vscode.window.showQuickPick(
       conversations.map((c) => ({
         label: titlesForPick[c.conversationId] || c.conversationId.slice(0, 12) + '...',
@@ -75,7 +94,7 @@ export async function setConversationLimit(
       { placeHolder: 'Select conversation' }
     );
     if (!selected) return;
-    return setConversationLimit(selected.conversationId, storePathOverride);
+    return setConversationLimit(selected.conversationId, resolvedOverride);
   }
 
   const isGlobal = cid === GLOBAL_LIMIT_KEY;
@@ -135,13 +154,13 @@ export async function setConversationLimit(
     maxEvents = parseInt(input, 10);
   }
 
-  const limits = getLimits(storePathOverride);
+  const limits = getLimits(resolvedOverride);
   const existing = limits[cid] ?? {};
   const limit: { maxCost?: number; maxEvents?: number } = { ...existing };
   if (maxCost !== undefined) limit.maxCost = maxCost;
   if (maxEvents !== undefined) limit.maxEvents = maxEvents;
 
-  setLimit(cid, limit, storePathOverride);
+  setLimit(cid, limit, resolvedOverride);
 
   const parts: string[] = [];
   if (limit.maxCost != null) parts.push(`$${limit.maxCost}`);

@@ -1,7 +1,10 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { getUsageStorePath, estimateCostForModel } from '../utils/constants';
+import { getUsageStorePath } from '../utils/constants';
 import { getAgentTranscriptsPathForWorkspace } from '../utils/cursorProject';
+import { getAllSessionCosts } from './sessionCosts';
+import { tokenCostCents } from '../utils/pricing';
+import { estimateTranscriptCostCents } from './transcriptTokens';
 
 const ACTIVE_CONVERSATION_FILENAME = 'active-conversation.json';
 const TITLES_FILENAME = 'conversation-titles.json';
@@ -50,9 +53,13 @@ export function setActiveConversationId(conversationId: string, overridePath?: s
 export interface ConversationUsage {
   conversationId: string;
   eventCount: number;
-  estimatedCost: number;
+  turnCount: number;
   lastTs: number;
   source: 'agent' | 'tab';
+  /** Real cost from cursor.com session delta (cents). Present when session has been closed. */
+  deltaCents?: number;
+  /** Estimated cost from token counts (prompt + completion). Does not account for caching. */
+  estimatedTokenCents?: number;
 }
 
 const MAX_LINES = 50000;
@@ -69,7 +76,18 @@ export function readUsageEvents(overridePath?: string): ConversationUsage[] {
   const lines = content.trim().split('\n').filter(Boolean);
 
   const toProcess = lines.length > MAX_LINES ? lines.slice(-MAX_LINES) : lines;
-  const byConversation = new Map<string, { events: number; cost: number; lastTs: number; source: string }>();
+  const byConversation = new Map<
+    string,
+    {
+      events: number;
+      turnCount: number;
+      lastTs: number;
+      source: string;
+      totalPromptTokens: number;
+      totalCompletionTokens: number;
+      lastModel: string;
+    }
+  >();
 
   for (const line of toProcess) {
     try {
@@ -77,37 +95,61 @@ export function readUsageEvents(overridePath?: string): ConversationUsage[] {
         ts?: number;
         event?: string;
         conversation_id?: string;
-        model?: string;
         source?: string;
+        prompt_tokens?: number;
+        completion_tokens?: number;
+        model?: string;
       };
       const cid = row.conversation_id || 'unknown';
-      const model = row.model || 'auto';
       const ts = row.ts || 0;
       const source = (row.source === 'tab' ? 'tab' : 'agent') as 'agent' | 'tab';
+      const isTurn = row.event === 'afterAgentResponse';
 
       const existing = byConversation.get(cid);
-      const cost = estimateCostForModel(model);
-
       if (existing) {
         existing.events++;
-        existing.cost += cost;
+        if (isTurn) existing.turnCount++;
         existing.lastTs = Math.max(existing.lastTs, ts);
+        if (typeof row.prompt_tokens === 'number') existing.totalPromptTokens += row.prompt_tokens;
+        if (typeof row.completion_tokens === 'number')
+          existing.totalCompletionTokens += row.completion_tokens;
+        if (typeof row.model === 'string') existing.lastModel = row.model;
       } else {
-        byConversation.set(cid, { events: 1, cost, lastTs: ts, source });
+        byConversation.set(cid, {
+          events: 1,
+          turnCount: isTurn ? 1 : 0,
+          lastTs: ts,
+          source,
+          totalPromptTokens: typeof row.prompt_tokens === 'number' ? row.prompt_tokens : 0,
+          totalCompletionTokens: typeof row.completion_tokens === 'number' ? row.completion_tokens : 0,
+          lastModel: typeof row.model === 'string' ? row.model : 'auto',
+        });
       }
     } catch (_) {
       // Skip invalid lines
     }
   }
 
+  const sessionCosts = getAllSessionCosts(overridePath);
   return Array.from(byConversation.entries())
-    .map(([conversationId, data]) => ({
-      conversationId,
-      eventCount: data.events,
-      estimatedCost: data.cost,
-      lastTs: data.lastTs,
-      source: data.source as 'agent' | 'tab',
-    }))
+    .map(([conversationId, data]) => {
+      // Prefer transcript-based estimate (full context) over hook-based (user message only).
+      const transcriptCents = estimateTranscriptCostCents(conversationId, data.lastModel);
+      const hookCents =
+        data.totalPromptTokens > 0 || data.totalCompletionTokens > 0
+          ? tokenCostCents(data.lastModel, data.totalPromptTokens, data.totalCompletionTokens)
+          : undefined;
+      const estimatedTokenCents = transcriptCents ?? hookCents;
+      return {
+        conversationId,
+        eventCount: data.events,
+        turnCount: data.turnCount,
+        lastTs: data.lastTs,
+        source: data.source as 'agent' | 'tab',
+        deltaCents: sessionCosts[conversationId],
+        estimatedTokenCents,
+      };
+    })
     .sort((a, b) => b.lastTs - a.lastTs);
 }
 

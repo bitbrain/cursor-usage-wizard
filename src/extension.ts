@@ -22,9 +22,27 @@ import {
   GLOBAL_LIMIT_KEY,
 } from './services/usageStore';
 import type { ConversationUsage } from './services/usageStore';
+import { snapshotStart, recordEnd } from './services/sessionCosts';
+import { setWorkspaceRoot } from './services/transcriptTokens';
+import { getUsageStorePath } from './utils/constants';
 
 let statusBarItems: ReturnType<typeof createUsageStatusBarItems>;
 let refreshInterval: NodeJS.Timeout | undefined;
+/** Current API pool usedCents from last cursor.com fetch (for session cost snapshots). */
+let lastKnownUsedCents: number | undefined;
+/** Last active conversation ID (for session boundary: recordEnd previous, snapshotStart new). */
+let lastActiveConversationId: string | undefined;
+
+/** Activity-triggered refresh throttle: timestamp of last completed fetch (for cooldown). */
+let lastFetchTime = 0;
+/** If true, run one more activity refresh after the current one completes. */
+let pendingActivityRefresh = false;
+/** Single timeout that runs a refresh at end of cooldown. */
+let activityRefreshScheduled: ReturnType<typeof setTimeout> | undefined;
+/** Debounce timer: after usage.jsonl activity, wait before requesting refresh. */
+let activityDebounceTimer: ReturnType<typeof setTimeout> | undefined;
+/** True while doRefresh() is in flight (prevents parallel activity refreshes). */
+let refreshInFlight = false;
 
 /** Conversation IDs we've already shown a global-limit warning for this session (avoid spam). */
 const notifiedOverLimit = new Set<string>();
@@ -37,18 +55,22 @@ function checkGlobalLimitAlerts(
   const global = limits[GLOBAL_LIMIT_KEY];
   if (!global || (global.maxCost == null && global.maxEvents == null)) return;
   const titles = getTitles(storePathOverride);
+  const maxCostCents = global.maxCost != null ? Math.round(global.maxCost * 100) : null;
   for (const c of conversations) {
-    const overCost = global.maxCost != null && c.estimatedCost >= global.maxCost;
+    const overCost =
+      maxCostCents != null && c.deltaCents != null && c.deltaCents >= maxCostCents;
     const overEvents = global.maxEvents != null && c.eventCount >= global.maxEvents;
     if (!overCost && !overEvents) continue;
     if (notifiedOverLimit.has(c.conversationId)) continue;
     notifiedOverLimit.add(c.conversationId);
     const name = titles[c.conversationId] || c.conversationId.slice(0, 12) + '...';
+    const costStr =
+      c.deltaCents != null ? `$${(c.deltaCents / 100).toFixed(2)}` : '?';
     const msg =
       overCost && overEvents
-        ? `"${name}" has exceeded the global limit ($${c.estimatedCost.toFixed(2)} >= $${global.maxCost}, ${c.eventCount} events >= ${global.maxEvents}).`
+        ? `"${name}" has exceeded the global limit (${costStr} >= $${global.maxCost}, ${c.eventCount} events >= ${global.maxEvents}).`
         : overCost
-          ? `"${name}" has exceeded the global cost limit ($${c.estimatedCost.toFixed(2)} >= $${global.maxCost}).`
+          ? `"${name}" has exceeded the global cost limit (${costStr} >= $${global.maxCost}).`
           : `"${name}" has exceeded the global event limit (${c.eventCount} >= ${global.maxEvents}).`;
     vscode.window.showWarningMessage(msg);
   }
@@ -67,7 +89,12 @@ export function activate(context: vscode.ExtensionContext): void {
     );
 
     const config = vscode.workspace.getConfiguration('cursorUsageWizard');
-    const storePathOverride = (config.get<string>('usageStorePath') || '').trim() || undefined;
+    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    const storePathOverride =
+      (config.get<string>('usageStorePath') || '').trim() ||
+      (workspaceRoot ? getUsageStorePath(undefined, workspaceRoot) : undefined);
+
+    setWorkspaceRoot(workspaceRoot);
 
     const treeProvider = new ConversationTreeDataProvider(storePathOverride);
     const detailProvider = new ConversationDetailProvider(storePathOverride);
@@ -88,7 +115,11 @@ export function activate(context: vscode.ExtensionContext): void {
       )
     );
 
-    const doRefresh = () => updateStats(statusBarItems, context);
+    const doRefresh = async (): Promise<number | undefined> => {
+      const usedCents = await updateStats(statusBarItems, context);
+      if (usedCents !== undefined) lastKnownUsedCents = usedCents;
+      return usedCents;
+    };
 
     const refreshConversationViews = () => {
       const conversations = readUsageEvents(storePathOverride);
@@ -101,6 +132,48 @@ export function activate(context: vscode.ExtensionContext): void {
         getActiveConversationId(storePathOverride)
       );
       checkGlobalLimitAlerts(conversations, storePathOverride);
+    };
+
+    const activityRefreshCooldownMs = Math.min(
+      120_000,
+      Math.max(5_000, (config.get<number>('activityRefreshCooldownSeconds', 15) ?? 15) * 1000)
+    );
+    const activityRefreshDebounceMs = Math.min(
+      10_000,
+      Math.max(1_000, config.get<number>('activityRefreshDebounceMs', 3000) ?? 3000)
+    );
+
+    const runActivityRefresh = () => {
+      if (refreshInFlight) return;
+      refreshInFlight = true;
+      void doRefresh().then((usedCents) => {
+        refreshInFlight = false;
+        if (usedCents !== undefined) lastFetchTime = Date.now();
+        refreshConversationViews();
+        if (pendingActivityRefresh) {
+          pendingActivityRefresh = false;
+          requestActivityRefresh();
+        }
+      });
+    };
+
+    const requestActivityRefresh = () => {
+      if (refreshInFlight) {
+        pendingActivityRefresh = true;
+        return;
+      }
+      const elapsed = Date.now() - lastFetchTime;
+      if (elapsed < activityRefreshCooldownMs) {
+        pendingActivityRefresh = true;
+        if (activityRefreshScheduled === undefined) {
+          activityRefreshScheduled = setTimeout(() => {
+            activityRefreshScheduled = undefined;
+            runActivityRefresh();
+          }, activityRefreshCooldownMs - elapsed);
+        }
+        return;
+      }
+      runActivityRefresh();
     };
 
     context.subscriptions.push(
@@ -140,8 +213,7 @@ export function activate(context: vscode.ExtensionContext): void {
         }
       ),
       vscode.commands.registerCommand('cursorUsageWizard.refreshStats', () => {
-        doRefresh();
-        refreshConversationViews();
+        void doRefresh().then(() => refreshConversationViews());
       })
     );
 
@@ -157,12 +229,21 @@ export function activate(context: vscode.ExtensionContext): void {
 
     const intervalSeconds = Math.max(config.get<number>('refreshInterval', 30), 5);
 
-    doRefresh();
-    refreshConversationViews();
+    void doRefresh().then((usedCents) => {
+      if (usedCents !== undefined) lastFetchTime = Date.now();
+      refreshConversationViews();
+      const current = getActiveConversationId(storePathOverride);
+      if (current != null && lastActiveConversationId == null && lastKnownUsedCents != null) {
+        snapshotStart(current, lastKnownUsedCents, storePathOverride);
+        lastActiveConversationId = current;
+      }
+    });
 
     refreshInterval = setInterval(() => {
-      doRefresh();
-      refreshConversationViews();
+      void doRefresh().then((usedCents) => {
+        if (usedCents !== undefined) lastFetchTime = Date.now();
+        refreshConversationViews();
+      });
     }, intervalSeconds * 1000);
     context.subscriptions.push({
       dispose: () => {
@@ -181,17 +262,43 @@ export function activate(context: vscode.ExtensionContext): void {
           getActiveConversationId(storePathOverride)
         );
         checkGlobalLimitAlerts(conversations, storePathOverride);
+        if (activityDebounceTimer !== undefined) clearTimeout(activityDebounceTimer);
+        activityDebounceTimer = setTimeout(() => {
+          activityDebounceTimer = undefined;
+          requestActivityRefresh();
+        }, activityRefreshDebounceMs);
       });
       context.subscriptions.push(watcherDisposable);
+      context.subscriptions.push({
+        dispose: () => {
+          if (activityRefreshScheduled !== undefined) {
+            clearTimeout(activityRefreshScheduled);
+            activityRefreshScheduled = undefined;
+          }
+          if (activityDebounceTimer !== undefined) {
+            clearTimeout(activityDebounceTimer);
+            activityDebounceTimer = undefined;
+          }
+        },
+      });
 
       const activeWatcher = watchActiveConversationFile(storePathOverride, () => {
-        const conversations = readUsageEvents(storePathOverride);
-        updateLatestStatusBarItem(
-          statusBarItems.latest,
-          conversations,
-          config.get<boolean>('showLatestInStatusBar', true),
-          getActiveConversationId(storePathOverride)
-        );
+        const newId = getActiveConversationId(storePathOverride);
+        if (
+          lastActiveConversationId != null &&
+          newId != null &&
+          lastActiveConversationId !== newId
+        ) {
+          recordEnd(lastActiveConversationId, lastKnownUsedCents ?? 0, storePathOverride);
+        }
+        void doRefresh().then((usedCents) => {
+          if (usedCents !== undefined) lastFetchTime = Date.now();
+          if (newId != null) {
+            snapshotStart(newId, usedCents ?? lastKnownUsedCents ?? 0, storePathOverride);
+            lastActiveConversationId = newId;
+          }
+          refreshConversationViews();
+        });
       });
       context.subscriptions.push(activeWatcher);
 
@@ -201,7 +308,23 @@ export function activate(context: vscode.ExtensionContext): void {
           workspaceRoot,
           storePathOverride,
           (conversationId) => {
-            setActiveConversationId(conversationId, storePathOverride);
+            if (
+              lastActiveConversationId != null &&
+              lastActiveConversationId !== conversationId
+            ) {
+              recordEnd(lastActiveConversationId, lastKnownUsedCents ?? 0, storePathOverride);
+            }
+            void doRefresh().then((usedCents) => {
+              if (usedCents !== undefined) lastFetchTime = Date.now();
+              snapshotStart(
+                conversationId,
+                usedCents ?? lastKnownUsedCents ?? 0,
+                storePathOverride
+              );
+              lastActiveConversationId = conversationId;
+              setActiveConversationId(conversationId, storePathOverride);
+              refreshConversationViews();
+            });
           }
         );
         context.subscriptions.push(transcriptWatcher);

@@ -1,7 +1,7 @@
 {
   "name": "cursor-usage-wizard",
   "displayName": "Cursor Usage Wizard",
-  "version": "1.0.2",
+  "version": "1.1.0",
   "description": "Monitor Cursor usage per conversation with status bar, limits, and light-weight cost estimation.",
   "main": "./out/extension.js",
   "scripts": {
@@ -12,7 +12,8 @@
     "vscode:prepublish": "npm run check-types && vite build --mode production"
   },
   "dependencies": {
-    "axios": "^1.6.0"
+    "axios": "^1.6.0",
+    "gpt-tokenizer": "^2.0.0"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
@@ -134,6 +135,22 @@
           "default": 30,
           "minimum": 5,
           "description": "How often to refresh stats (seconds).",
+          "scope": "window"
+        },
+        "cursorUsageWizard.activityRefreshCooldownSeconds": {
+          "type": "number",
+          "default": 15,
+          "minimum": 5,
+          "maximum": 120,
+          "description": "Minimum seconds between activity-triggered API refreshes (avoids spamming cursor.com).",
+          "scope": "window"
+        },
+        "cursorUsageWizard.activityRefreshDebounceMs": {
+          "type": "number",
+          "default": 3000,
+          "minimum": 1000,
+          "maximum": 10000,
+          "description": "Milliseconds to wait after usage file activity before requesting a refresh (bursts of turns cause one request).",
           "scope": "window"
         },
         "cursorUsageWizard.showPerConversationInStatusBar": {

@@ -1,6 +1,6 @@
 ![Cursor Usage Wizard](media/banner.webp)
 
-[![Version](https://img.shields.io/badge/version-1.0.2-blue.svg)](https://github.com/bitbrain/cursor-usage-wizard)
+[![Version](https://img.shields.io/badge/version-1.1.0-blue.svg)](https://github.com/bitbrain/cursor-usage-wizard)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 **Cursor Usage Wizard** shows your Cursor usage and estimated cost in the status bar, tracks usage per conversation (Agent + Tab), and lets you set per-conversation limits so you stay in control of spend.
@@ -31,7 +31,7 @@ Set a cost or event limit per conversation. Cost and event limits are both set f
 
 ### 💰 Cost estimation
 
-Lightweight model lookup table (no token counting). Plan-aware when the API exposes it, or set your tier with `cursorUsageWizard.planOverride` (`free`, `pro`, `pro_plus`, `ultra`).
+Per-conversation cost is shown from Cursor’s billing API when a session has ended. When that isn’t available, the extension uses **token-based estimation**: hooks capture prompt and response text, a local tokenizer counts tokens, and a model pricing table yields an estimated cost. Values from token estimation are labeled **(est.)** in the UI. Token estimation does **not** account for prompt caching, so actual Cursor billing may be lower than the estimate.
 
 ## 📦 Installation
 
@@ -55,9 +55,9 @@ flowchart LR
 ```
 
 1. **Extension** uses your session token (from the Set Session Token command) to fetch usage from Cursor’s API.
-2. **Hooks** (in `~/.cursor/hooks.json`) append events to `~/.cursor/usage-wizard/usage.jsonl`.
-3. **Cost estimation** uses a simple model lookup table (no token parsing).
-4. **Limits** are stored in `~/.cursor/usage-wizard/limits.json` and enforced by the `beforeSubmitPrompt` hook.
+2. **Hooks** (in `~/.cursor/hooks.json`) append events and token counts to `~/.cursor/usage-wizard/usage.jsonl`.
+3. **Cost** comes from Cursor’s billing when available, or from token-based estimation (tokenizer + model pricing table). Token estimates do not reflect caching discounts.
+4. **Limits** are stored in `~/.cursor/usage-wizard/limits.json` and enforced by the `beforeSubmitPrompt` hook (using billing or token-estimated cost).
 
 **🔒 Privacy:** Your session token is stored in VS Code’s secret storage and used only to request usage from Cursor’s API. The extension does not send data elsewhere and does not use telemetry.
 
