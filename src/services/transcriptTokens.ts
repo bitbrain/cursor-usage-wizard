@@ -70,16 +70,22 @@ function getFileSizeSafe(filePath: string): number {
 }
 
 /**
- * Estimate cost (in cents) for a conversation by tokenising its agent transcript JSONL.
- * Includes subagent transcripts. Caches results by file size to avoid re-counting
- * transcripts that haven't changed.
- *
- * Returns undefined when the workspace root is not set or no transcript exists.
+ * Get token counts for a conversation from agent transcript JSONL (main + subagents).
+ * Caches by file sizes. Returns undefined when workspace root is not set or no transcript exists.
+ * Used for cost (estimateTranscriptCostCents) and for energy/water/CO2 when hooks have no token data.
  */
-export function estimateTranscriptCostCents(
-  conversationId: string,
-  model: string | undefined
-): number | undefined {
+export function getTranscriptTokenCounts(
+  conversationId: string
+): { inputTokens: number; outputTokens: number } | undefined {
+  const result = getTranscriptTokensInternal(conversationId);
+  if (!result) return undefined;
+  if (result.inputTokens === 0 && result.outputTokens === 0) return undefined;
+  return result;
+}
+
+function getTranscriptTokensInternal(
+  conversationId: string
+): { inputTokens: number; outputTokens: number } | undefined {
   if (!workspaceRoot) return undefined;
 
   const transcriptsBase = getAgentTranscriptsPathForWorkspace(workspaceRoot);
@@ -103,7 +109,6 @@ export function estimateTranscriptCostCents(
     }
   }
 
-  // Check cache validity
   const cached = cache.get(conversationId);
   if (cached) {
     const sameMain = cached.fileSize === mainSize;
@@ -114,17 +119,14 @@ export function estimateTranscriptCostCents(
       Object.entries(subagentFiles).every(([k, v]) => cached.subagentSizes[k] === v);
 
     if (sameMain && sameSubSizes) {
-      if (cached.inputTokens === 0 && cached.outputTokens === 0) return undefined;
-      return tokenCostCents(model, cached.inputTokens, cached.outputTokens);
+      return { inputTokens: cached.inputTokens, outputTokens: cached.outputTokens };
     }
   }
 
-  // Re-count main transcript
   const main = readTranscriptFile(mainFile);
   let inputTokens = main.inputTokens;
   let outputTokens = main.outputTokens;
 
-  // Re-count subagents
   for (const file of Object.keys(subagentFiles)) {
     const sub = readTranscriptFile(path.join(subagentsDir, file));
     inputTokens += sub.inputTokens;
@@ -138,6 +140,22 @@ export function estimateTranscriptCostCents(
     outputTokens,
   });
 
-  if (inputTokens === 0 && outputTokens === 0) return undefined;
-  return tokenCostCents(model, inputTokens, outputTokens);
+  return { inputTokens, outputTokens };
+}
+
+/**
+ * Estimate cost (in cents) for a conversation by tokenising its agent transcript JSONL.
+ * Includes subagent transcripts. Caches results by file size to avoid re-counting
+ * transcripts that haven't changed.
+ *
+ * Returns undefined when the workspace root is not set or no transcript exists.
+ */
+export function estimateTranscriptCostCents(
+  conversationId: string,
+  model: string | undefined
+): number | undefined {
+  const tokens = getTranscriptTokensInternal(conversationId);
+  if (!tokens) return undefined;
+  if (tokens.inputTokens === 0 && tokens.outputTokens === 0) return undefined;
+  return tokenCostCents(model, tokens.inputTokens, tokens.outputTokens);
 }

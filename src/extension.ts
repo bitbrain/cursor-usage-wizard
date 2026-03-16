@@ -85,7 +85,9 @@ export function activate(context: vscode.ExtensionContext): void {
       statusBarItems.auto,
       statusBarItems.api,
       statusBarItems.onDemand,
-      statusBarItems.latest
+      statusBarItems.latest,
+      statusBarItems.water,
+      statusBarItems.co2
     );
 
     const config = vscode.workspace.getConfiguration('cursorUsageWizard');
@@ -116,21 +118,26 @@ export function activate(context: vscode.ExtensionContext): void {
     );
 
     const doRefresh = async (): Promise<number | undefined> => {
-      const usedCents = await updateStats(statusBarItems, context);
+      const usedCents = await updateStats(statusBarItems, context, storePathOverride);
       if (usedCents !== undefined) lastKnownUsedCents = usedCents;
       return usedCents;
     };
 
-    const refreshConversationViews = () => {
+    /** When skipLatestStatusBar is true, do not update latest/water/co2 (e.g. right after doRefresh, since updateStatusBar already did). */
+    const refreshConversationViews = (skipLatestStatusBar?: boolean) => {
       const conversations = readUsageEvents(storePathOverride);
       treeProvider.refresh();
       detailProvider.setConversations(conversations);
-      updateLatestStatusBarItem(
-        statusBarItems.latest,
-        conversations,
-        config.get<boolean>('showLatestInStatusBar', true),
-        getActiveConversationId(storePathOverride)
-      );
+      if (!skipLatestStatusBar) {
+        updateLatestStatusBarItem(
+          statusBarItems.latest,
+          statusBarItems.water,
+          statusBarItems.co2,
+          conversations,
+          config.get<boolean>('showLatestInStatusBar', true),
+          getActiveConversationId(storePathOverride)
+        );
+      }
       checkGlobalLimitAlerts(conversations, storePathOverride);
     };
 
@@ -149,7 +156,7 @@ export function activate(context: vscode.ExtensionContext): void {
       void doRefresh().then((usedCents) => {
         refreshInFlight = false;
         if (usedCents !== undefined) lastFetchTime = Date.now();
-        refreshConversationViews();
+        refreshConversationViews(true);
         if (pendingActivityRefresh) {
           pendingActivityRefresh = false;
           requestActivityRefresh();
@@ -213,7 +220,7 @@ export function activate(context: vscode.ExtensionContext): void {
         }
       ),
       vscode.commands.registerCommand('cursorUsageWizard.refreshStats', () => {
-        void doRefresh().then(() => refreshConversationViews());
+        void doRefresh().then(() => refreshConversationViews(true));
       })
     );
 
@@ -231,7 +238,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
     void doRefresh().then((usedCents) => {
       if (usedCents !== undefined) lastFetchTime = Date.now();
-      refreshConversationViews();
+      refreshConversationViews(true);
       const current = getActiveConversationId(storePathOverride);
       if (current != null && lastActiveConversationId == null && lastKnownUsedCents != null) {
         snapshotStart(current, lastKnownUsedCents, storePathOverride);
@@ -242,7 +249,7 @@ export function activate(context: vscode.ExtensionContext): void {
     refreshInterval = setInterval(() => {
       void doRefresh().then((usedCents) => {
         if (usedCents !== undefined) lastFetchTime = Date.now();
-        refreshConversationViews();
+        refreshConversationViews(true);
       });
     }, intervalSeconds * 1000);
     context.subscriptions.push({
@@ -257,6 +264,8 @@ export function activate(context: vscode.ExtensionContext): void {
         detailProvider.setConversations(conversations);
         updateLatestStatusBarItem(
           statusBarItems.latest,
+          statusBarItems.water,
+          statusBarItems.co2,
           conversations,
           config.get<boolean>('showLatestInStatusBar', true),
           getActiveConversationId(storePathOverride)
@@ -284,20 +293,21 @@ export function activate(context: vscode.ExtensionContext): void {
 
       const activeWatcher = watchActiveConversationFile(storePathOverride, () => {
         const newId = getActiveConversationId(storePathOverride);
+        const changedConversation =
+          newId != null && lastActiveConversationId !== newId;
         if (
           lastActiveConversationId != null &&
-          newId != null &&
-          lastActiveConversationId !== newId
+          changedConversation
         ) {
           recordEnd(lastActiveConversationId, lastKnownUsedCents ?? 0, storePathOverride);
         }
         void doRefresh().then((usedCents) => {
           if (usedCents !== undefined) lastFetchTime = Date.now();
-          if (newId != null) {
+          if (changedConversation && newId != null) {
             snapshotStart(newId, usedCents ?? lastKnownUsedCents ?? 0, storePathOverride);
             lastActiveConversationId = newId;
           }
-          refreshConversationViews();
+          refreshConversationViews(true);
         });
       });
       context.subscriptions.push(activeWatcher);
@@ -308,22 +318,25 @@ export function activate(context: vscode.ExtensionContext): void {
           workspaceRoot,
           storePathOverride,
           (conversationId) => {
+            const changedConversation = lastActiveConversationId !== conversationId;
             if (
               lastActiveConversationId != null &&
-              lastActiveConversationId !== conversationId
+              changedConversation
             ) {
               recordEnd(lastActiveConversationId, lastKnownUsedCents ?? 0, storePathOverride);
             }
             void doRefresh().then((usedCents) => {
               if (usedCents !== undefined) lastFetchTime = Date.now();
-              snapshotStart(
-                conversationId,
-                usedCents ?? lastKnownUsedCents ?? 0,
-                storePathOverride
-              );
-              lastActiveConversationId = conversationId;
+              if (changedConversation) {
+                snapshotStart(
+                  conversationId,
+                  usedCents ?? lastKnownUsedCents ?? 0,
+                  storePathOverride
+                );
+                lastActiveConversationId = conversationId;
+              }
               setActiveConversationId(conversationId, storePathOverride);
-              refreshConversationViews();
+              refreshConversationViews(true);
             });
           }
         );

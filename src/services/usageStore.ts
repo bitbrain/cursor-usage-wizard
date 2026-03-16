@@ -3,8 +3,8 @@ import * as path from 'path';
 import { getUsageStorePath } from '../utils/constants';
 import { getAgentTranscriptsPathForWorkspace } from '../utils/cursorProject';
 import { getAllSessionCosts } from './sessionCosts';
-import { tokenCostCents } from '../utils/pricing';
-import { estimateTranscriptCostCents } from './transcriptTokens';
+import { tokenCostCents, tokenEnergyWh } from '../utils/pricing';
+import { estimateTranscriptCostCents, getTranscriptTokenCounts } from './transcriptTokens';
 
 const ACTIVE_CONVERSATION_FILENAME = 'active-conversation.json';
 const TITLES_FILENAME = 'conversation-titles.json';
@@ -60,6 +60,8 @@ export interface ConversationUsage {
   deltaCents?: number;
   /** Estimated cost from token counts (prompt + completion). Does not account for caching. */
   estimatedTokenCents?: number;
+  /** Estimated energy (Wh) from token counts; undefined when no token data. */
+  estimatedEnergyWh?: number;
 }
 
 const MAX_LINES = 50000;
@@ -105,6 +107,8 @@ export function readUsageEvents(overridePath?: string): ConversationUsage[] {
       const source = (row.source === 'tab' ? 'tab' : 'agent') as 'agent' | 'tab';
       const isTurn = row.event === 'afterAgentResponse';
 
+      const hasTokenData =
+        isTurn || typeof row.prompt_tokens === 'number' || typeof row.completion_tokens === 'number';
       const existing = byConversation.get(cid);
       if (existing) {
         existing.events++;
@@ -113,7 +117,7 @@ export function readUsageEvents(overridePath?: string): ConversationUsage[] {
         if (typeof row.prompt_tokens === 'number') existing.totalPromptTokens += row.prompt_tokens;
         if (typeof row.completion_tokens === 'number')
           existing.totalCompletionTokens += row.completion_tokens;
-        if (typeof row.model === 'string') existing.lastModel = row.model;
+        if (typeof row.model === 'string' && hasTokenData) existing.lastModel = row.model;
       } else {
         byConversation.set(cid, {
           events: 1,
@@ -122,7 +126,8 @@ export function readUsageEvents(overridePath?: string): ConversationUsage[] {
           source,
           totalPromptTokens: typeof row.prompt_tokens === 'number' ? row.prompt_tokens : 0,
           totalCompletionTokens: typeof row.completion_tokens === 'number' ? row.completion_tokens : 0,
-          lastModel: typeof row.model === 'string' ? row.model : 'auto',
+          lastModel:
+            typeof row.model === 'string' && hasTokenData ? row.model : 'auto',
         });
       }
     } catch (_) {
@@ -134,12 +139,31 @@ export function readUsageEvents(overridePath?: string): ConversationUsage[] {
   return Array.from(byConversation.entries())
     .map(([conversationId, data]) => {
       // Prefer transcript-based estimate (full context) over hook-based (user message only).
-      const transcriptCents = estimateTranscriptCostCents(conversationId, data.lastModel);
-      const hookCents =
-        data.totalPromptTokens > 0 || data.totalCompletionTokens > 0
-          ? tokenCostCents(data.lastModel, data.totalPromptTokens, data.totalCompletionTokens)
+      // Use the same selected token source for both cost and energy so values stay aligned.
+      const transcriptTokens = getTranscriptTokenCounts(conversationId);
+      const transcriptTotalTokens =
+        transcriptTokens != null
+          ? transcriptTokens.inputTokens + transcriptTokens.outputTokens
+          : 0;
+      const hookPromptTokens = data.totalPromptTokens;
+      const hookCompletionTokens = data.totalCompletionTokens;
+      const hookTotalTokens = hookPromptTokens + hookCompletionTokens;
+      const useTranscriptSource = transcriptTotalTokens > 0;
+      const selectedInputTokens = useTranscriptSource
+        ? transcriptTokens!.inputTokens
+        : hookPromptTokens;
+      const selectedOutputTokens = useTranscriptSource
+        ? transcriptTokens!.outputTokens
+        : hookCompletionTokens;
+      const selectedTotalTokens = selectedInputTokens + selectedOutputTokens;
+      const estimatedTokenCents =
+        selectedTotalTokens > 0
+          ? tokenCostCents(data.lastModel, selectedInputTokens, selectedOutputTokens)
           : undefined;
-      const estimatedTokenCents = transcriptCents ?? hookCents;
+      const estimatedEnergyWh =
+        selectedTotalTokens > 0
+          ? tokenEnergyWh(data.lastModel, selectedTotalTokens)
+          : undefined;
       return {
         conversationId,
         eventCount: data.events,
@@ -148,6 +172,7 @@ export function readUsageEvents(overridePath?: string): ConversationUsage[] {
         source: data.source as 'agent' | 'tab',
         deltaCents: sessionCosts[conversationId],
         estimatedTokenCents,
+        estimatedEnergyWh,
       };
     })
     .sort((a, b) => b.lastTs - a.lastTs);

@@ -11,7 +11,8 @@ import { getStartCents } from '../services/sessionCosts';
  */
 export async function updateStats(
   items: UsageStatusBarItems,
-  context: vscode.ExtensionContext
+  context: vscode.ExtensionContext,
+  storePathOverride?: string
 ): Promise<number | undefined> {
   const token = await getSessionToken(context);
   if (!token) {
@@ -39,7 +40,6 @@ export async function updateStats(
     return undefined;
   }
 
-  const storePathOverride = config.get<string>('usageStorePath');
   const showPerConversation = config.get<boolean>('showPerConversationInStatusBar', false);
   const showLatestInStatusBar = config.get<boolean>('showLatestInStatusBar', true);
   const conversations = readUsageEvents(storePathOverride);

@@ -35,6 +35,9 @@ export function snapshotStart(
       // ignore
     }
   }
+  if (typeof starts[conversationId] === 'number') {
+    return;
+  }
   starts[conversationId] = usedCents;
   fs.writeFileSync(file, JSON.stringify(starts, null, 2), 'utf8');
 }
